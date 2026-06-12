@@ -1,0 +1,61 @@
+"""Constants for HALP!."""
+
+from __future__ import annotations
+
+DOMAIN = "halp"
+NAME = "HALP!"
+VERSION = "0.0.1"
+
+PLATFORMS = ["sensor", "binary_sensor"]
+
+CONF_PERSON_ENTITY = "person_entity"
+CONF_PERSON_UNIQUE_ID = "person_unique_id"
+
+CONF_GPS_ENTITIES = "gps_entities"
+CONF_BLE_ENTITIES = "ble_entities"
+CONF_ROUTER_ENTITIES = "router_entities"
+
+CONF_BATTERY_LEVEL_ENTITY = "battery_level_entity"
+CONF_BATTERY_STATE_ENTITY = "battery_state_entity"
+CONF_LOCATION_PERMISSION_ENTITY = "location_permission_entity"
+CONF_SSID_ENTITY = "ssid_entity"
+CONF_BSSID_ENTITY = "bssid_entity"
+CONF_CONNECTION_TYPE_ENTITY = "connection_type_entity"
+
+CONF_RELIABLE_THRESHOLD = "reliable_threshold"
+CONF_GPS_WEIGHT = "gps_weight"
+CONF_BLE_WEIGHT = "ble_weight"
+CONF_ROUTER_WEIGHT = "router_weight"
+
+SOURCE_TYPE_GPS = "gps"
+SOURCE_TYPE_BLE = "ble"
+SOURCE_TYPE_ROUTER = "router"
+
+SOURCE_TYPE_NAMES = {
+    SOURCE_TYPE_GPS: "GPS",
+    SOURCE_TYPE_BLE: "BLE",
+    SOURCE_TYPE_ROUTER: "Router",
+}
+
+LOCATION_HOME = "home"
+LOCATION_AWAY = "away"
+LOCATION_UNKNOWN = "unknown"
+LOCATION_UNAVAILABLE = "unavailable"
+LOCATION_MISSING = "missing"
+
+DEFAULT_RELIABLE_THRESHOLD = 70
+
+DEFAULT_GPS_WEIGHT = 100
+DEFAULT_BLE_WEIGHT = 70
+DEFAULT_ROUTER_WEIGHT = 55
+
+FRESHNESS_EXCELLENT_MINUTES = 15
+FRESHNESS_GOOD_MINUTES = 60
+FRESHNESS_FAIR_MINUTES = 240
+FRESHNESS_POOR_MINUTES = 480
+
+DEFAULT_SOURCE_WEIGHTS = {
+    SOURCE_TYPE_GPS: DEFAULT_GPS_WEIGHT,
+    SOURCE_TYPE_BLE: DEFAULT_BLE_WEIGHT,
+    SOURCE_TYPE_ROUTER: DEFAULT_ROUTER_WEIGHT,
+}

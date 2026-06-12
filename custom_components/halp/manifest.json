@@ -1,0 +1,11 @@
+{
+  "domain": "halp",
+  "name": "HALP! (HA Location & Presence analyzer)",
+  "codeowners": ["@KruseLuds"],
+  "config_flow": true,
+  "documentation": "https://github.com/KruseLuds/halp/blob/main/README.md",
+  "issue_tracker": "https://github.com/KruseLuds/halp/issues",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.0.1"
+}

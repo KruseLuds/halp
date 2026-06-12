@@ -1,0 +1,46 @@
+{
+  "title": "HALP!",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up HALP!",
+        "description": "Select the Home Assistant Person entity HALP! should analyze. HALP! will not modify the Person entity or any trackers.",
+        "data": {
+          "person_entity": "Person entity"
+        }
+      },
+      "classify_person_sources_v2": {
+        "title": "Classify assigned location sources",
+        "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, WiFi/router, BLE, or Other.",
+        "data": {}
+      }
+    },
+    "error": {
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi/router, or BLE."
+    },
+    "abort": {
+      "already_configured": "This Person entity is already configured in HALP!."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure HALP!",
+        "description": "Adjust HALP!'s reliability threshold and source weights."
+      },
+      "tuning": {
+        "title": "Tune HALP! reliability scoring",
+        "description": "Reliable threshold is a 0 to 100 confidence percentage. Source weights are voting strength values from 0 to 200.",
+        "data": {
+          "reliable_threshold": "Reliability threshold % (0-100):",
+          "gps_weight": "GPS source weight (0-200):",
+          "ble_weight": "BLE source weight (0-200):",
+          "router_weight": "WiFi/router source weight (0-200):"
+        }
+      }
+    },
+    "error": {
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi/router, or BLE."
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "title": "HALP!",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up HALP!",
+        "description": "Select the Home Assistant Person entity HALP! should analyze. HALP! will not modify the Person entity or any trackers.",
+        "data": {
+          "name": "Display name",
+          "person_entity": "Person entity"
+        }
+      },
+      "classify_person_sources_v2": {
+        "title": "Classify assigned location sources",
+        "description": "Below are the sensors assigned to {person_name}. Please use the drop-downs to correct the classification for each sensor below as needed (to GPS, WiFi, BLE, or Other). (Note, the below selections can be changed later in the integration configuration screen.)"
+      }
+    },
+    "error": {
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi, or BLE."
+    },
+    "abort": {
+      "already_configured": "This Person entity is already configured in HALP!."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure HALP!",
+        "description": "Use the drop-downs to change the classification for each assigned tracker."
+      }
+    },
+    "error": {
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi, or BLE."
+    }
+  }
+}
