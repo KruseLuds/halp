@@ -106,6 +106,98 @@ This distinction is the foundation of the project.
 
 ---
 
+# Building a Reliable Presence System
+
+Before using HALP!, each person should first be configured in Home Assistant using a standard Person entity.
+
+Each Person should have one or more location sources assigned to it, such as GPS trackers, BLE trackers, and router/WiFi trackers. Home Assistant combines those sources to determine the Person's current location, while HALP! analyzes the quality and reliability of those decisions.
+
+HALP! works best when Home Assistant is configured with multiple independent location sources.
+
+No single tracking method is perfect. GPS can be delayed, BLE can have range limitations, and router tracking can miss devices due to power-saving features or WiFi roaming behavior.
+
+For the most reliable results, combine GPS, BLE, and WiFi/router tracking whenever possible.
+
+HALP! is designed to help determine which sources are actually reliable in your environment.
+
+## GPS Tracking
+
+GPS is typically the primary source used to determine when a person arrives at or leaves Home.
+
+Recommended sources include:
+
+* Home Assistant Companion App
+* iCloud3
+* Other GPS-capable device trackers
+
+Best practices:
+
+* Disable battery optimization for the Home Assistant Companion App.
+* Allow background location access.
+* Allow precise location access when available.
+* Verify that Home Assistant receives regular location updates.
+* Confirm that Home and other zones are correctly configured.
+
+GPS generally provides the best long-range presence information but may not immediately reflect indoor movement.
+
+## BLE Tracking
+
+BLE is often the fastest method for confirming that someone is physically present at Home.
+
+Recommended sources include:
+
+* ESPresense
+* Bermuda
+* Bluetooth Proxies
+* Companion App BLE tracking
+
+Best practices:
+
+* Deploy multiple BLE receivers throughout the home.
+* Avoid relying on a single Bluetooth receiver.
+* Place receivers away from major sources of RF interference.
+* Verify that the phone advertises BLE consistently.
+* Test detection reliability in common living areas.
+
+BLE is often extremely effective for confirming presence but usually cannot determine precise away locations.
+
+## WiFi / Router Tracking
+
+Router-based tracking can provide useful supporting evidence when a device is connected to the home network.
+
+Examples include:
+
+* UniFi
+* Omada
+* OpenWRT
+* Router integrations supported by Home Assistant
+
+Best practices:
+
+* Ensure devices reconnect automatically to home WiFi.
+* Verify that the router integration reports device presence reliably.
+* If using DHCP reservations or static IP assignments, ensure the phone or device is configured to use a consistent MAC address for the home WiFi network. Devices configured to randomize their MAC address may receive different identities from the router, preventing reliable DHCP reservation assignment and causing router-based presence tracking to become unreliable.
+* Be aware that modern phones may enter aggressive power-saving modes.
+* Treat router tracking as supporting evidence rather than the sole source of truth.
+
+Router tracking can be very reliable in some environments and nearly unusable in others. HALP! helps determine which is true for your installation.
+
+## Recommended Approach
+
+For most installations:
+
+GPS
++
+BLE
++
+WiFi / Router Tracking
+
+provides significantly better results than relying on any single source.
+
+HALP! evaluates how well those sources agree, how recently they reported, and how reliable they have historically been so that you can make informed decisions about your Home Assistant automations.
+
+---
+
 # Location Analysis Engine
 
 HALP! evaluates all configured location sources.
