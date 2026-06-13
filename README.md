@@ -400,7 +400,7 @@ views:
 
     cards:
       - type: entities
-        title: Person #1
+        title: <person_name_1>
         entities:
           - entity: sensor.halp_<person_name_1>_vetted_location
             name: Location
@@ -477,7 +477,7 @@ views:
           - type: vertical-stack
             cards:
               - type: entities
-                title: Person #1
+                title: <person_name_1>
                 entities:
                   - entity: sensor.halp_<person_name_1>_vetted_location
                     name: Location
@@ -491,7 +491,7 @@ views:
           - type: vertical-stack
             cards:
               - type: entities
-                title: Person #2
+                title: <person_name_2>
                 entities:
                   - entity: sensor.halp_<person_name_2>_vetted_location
                     name: Location

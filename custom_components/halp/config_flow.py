@@ -325,37 +325,147 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class HalpOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle the Configure flow for an existing HALP! entry."""
+    """Handle the Configure flow for an existing HALP! entry.
+
+    The Configure flow is intentionally based on the trackers currently assigned
+    to the Home Assistant Person entity.
+
+    If a user replaces a phone or changes Person tracker assignments, old HALP!
+    tracker selections should not continue to appear in the Configure dialog.
+    Submitting this flow saves only the trackers currently assigned to the
+    Person and removes any stale tracker IDs that were previously stored.
+    """
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Store the config entry being edited."""
         self._config_entry = config_entry
+        self._data: dict[str, Any] = {}
+        self._assigned_trackers: list[str] = []
+        self._guessed_classes: dict[str, str] = {}
 
     async def async_step_init(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> config_entries.ConfigFlowResult:
-        """Open the tuning screen."""
-        return await self.async_step_tuning(user_input)
+        """Start the Configure flow."""
+        return await self.async_step_person()
+
+    async def async_step_person(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Allow the user to confirm or change the Person entity."""
+        current = {
+            **dict(self._config_entry.data),
+            **dict(self._config_entry.options),
+        }
+
+        if user_input is not None:
+            person_entity = user_input[CONF_PERSON_ENTITY]
+
+            registry = er.async_get(self.hass)
+            person_registry_entry = registry.async_get(person_entity)
+
+            person_unique_id = None
+            if person_registry_entry is not None:
+                person_unique_id = person_registry_entry.unique_id
+
+            self._data = dict(current)
+            self._data[CONF_PERSON_ENTITY] = person_entity
+            self._data[CONF_PERSON_UNIQUE_ID] = person_unique_id
+
+            await self._discover_sources(person_entity, current)
+
+            return await self.async_step_classify_person_sources()
+
+        return self.async_show_form(
+            step_id="person",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PERSON_ENTITY,
+                        default=current.get(CONF_PERSON_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain="person")
+                    ),
+                }
+            ),
+            errors={},
+        )
+
+    async def async_step_classify_person_sources(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Allow the user to classify the current Person trackers."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            gps_entities, ble_entities, router_entities = self._classified_groups(
+                user_input,
+                self._assigned_trackers,
+            )
+
+            if not gps_entities and not ble_entities and not router_entities:
+                errors["base"] = "at_least_one_classified_source_required"
+            else:
+                self._data[CONF_GPS_ENTITIES] = gps_entities
+                self._data[CONF_BLE_ENTITIES] = ble_entities
+                self._data[CONF_ROUTER_ENTITIES] = router_entities
+
+                return await self.async_step_tuning()
+
+        return self.async_show_form(
+            step_id="classify_person_sources",
+            data_schema=self._classification_schema(
+                self._assigned_trackers,
+                self._guessed_classes,
+            ),
+            errors=errors,
+            description_placeholders={
+                "person_name": self._person_name(),
+            },
+        )
 
     async def async_step_tuning(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> config_entries.ConfigFlowResult:
         """Edit reliability threshold and source weights."""
-        current = {**dict(self._config_entry.data), **dict(self._config_entry.options)}
+        current = {
+            **dict(self._config_entry.data),
+            **dict(self._config_entry.options),
+            **dict(self._data),
+        }
 
         if user_input is not None:
-            return self.async_create_entry(
-                title="",
-                data={
-                    **dict(self._config_entry.options),
+            new_data = dict(self._config_entry.data)
+            new_data.update(
+                {
+                    CONF_PERSON_ENTITY: self._data[CONF_PERSON_ENTITY],
+                    CONF_PERSON_UNIQUE_ID: self._data.get(CONF_PERSON_UNIQUE_ID),
+                    CONF_GPS_ENTITIES: self._data.get(CONF_GPS_ENTITIES, []),
+                    CONF_BLE_ENTITIES: self._data.get(CONF_BLE_ENTITIES, []),
+                    CONF_ROUTER_ENTITIES: self._data.get(CONF_ROUTER_ENTITIES, []),
                     CONF_RELIABLE_THRESHOLD: user_input[CONF_RELIABLE_THRESHOLD],
                     CONF_GPS_WEIGHT: user_input[CONF_GPS_WEIGHT],
                     CONF_BLE_WEIGHT: user_input[CONF_BLE_WEIGHT],
                     CONF_ROUTER_WEIGHT: user_input[CONF_ROUTER_WEIGHT],
-                },
+                }
             )
+
+            self.hass.config_entries.async_update_entry(
+                self._config_entry,
+                data=new_data,
+                options={},
+                title=self._person_name(),
+            )
+
+            self.hass.async_create_task(
+                self.hass.config_entries.async_reload(self._config_entry.entry_id)
+            )
+
+            return self.async_create_entry(title="", data={})
 
         return self.async_show_form(
             step_id="tuning",
@@ -412,3 +522,198 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
             ),
             errors={},
         )
+
+    def _classified_groups(
+        self,
+        user_input: dict[str, Any],
+        trackers: list[str],
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Split tracker entity IDs into GPS, BLE, and WiFi groups."""
+        gps_entities: list[str] = []
+        ble_entities: list[str] = []
+        router_entities: list[str] = []
+
+        for entity_id in trackers:
+            classification = user_input.get(entity_id, CLASS_OTHER)
+
+            if classification == CLASS_GPS:
+                gps_entities.append(entity_id)
+            elif classification == CLASS_BLE:
+                ble_entities.append(entity_id)
+            elif classification == CLASS_WIFI:
+                router_entities.append(entity_id)
+
+        return gps_entities, ble_entities, router_entities
+
+    def _classification_schema(
+        self,
+        trackers: list[str],
+        defaults: dict[str, str],
+    ) -> vol.Schema:
+        """Build the tracker classification form."""
+        schema_fields: dict[Any, Any] = {}
+
+        for entity_id in trackers:
+            schema_fields[
+                vol.Required(
+                    entity_id,
+                    default=defaults.get(entity_id, CLASS_OTHER),
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=classification_options(),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+
+        return vol.Schema(schema_fields)
+
+    async def _discover_sources(
+        self,
+        person_entity: str,
+        current: dict[str, Any],
+    ) -> None:
+        """Discover only the trackers currently assigned to the selected Person."""
+        assigned_trackers = await self._assigned_trackers_for_person(person_entity)
+
+        # Also include the Person's current active source if Home Assistant
+        # exposes one and it is a device_tracker entity. This should normally
+        # already be included in the Person tracker list, but this makes the
+        # Configure flow resilient if HA exposes it separately.
+        person_state = self.hass.states.get(person_entity)
+        if person_state:
+            current_source = person_state.attributes.get("source")
+            if isinstance(current_source, str) and current_source.startswith("device_tracker."):
+                assigned_trackers.append(current_source)
+
+        # Important:
+        # Do NOT include previously configured HALP trackers here.
+        #
+        # If the Person changed from an old phone to a new phone, including old
+        # configured trackers would keep stale entity IDs in the Configure form.
+        # The Configure flow should show the current Person trackers only, and
+        # submitting it should replace the old HALP tracker lists.
+        self._assigned_trackers = sorted(set(assigned_trackers))
+
+        registry = er.async_get(self.hass)
+        self._guessed_classes = {}
+
+        for entity_id in self._assigned_trackers:
+            if entity_id in current.get(CONF_GPS_ENTITIES, []):
+                self._guessed_classes[entity_id] = CLASS_GPS
+                continue
+
+            if entity_id in current.get(CONF_BLE_ENTITIES, []):
+                self._guessed_classes[entity_id] = CLASS_BLE
+                continue
+
+            if entity_id in current.get(CONF_ROUTER_ENTITIES, []):
+                self._guessed_classes[entity_id] = CLASS_WIFI
+                continue
+
+            entity = registry.async_get(entity_id)
+            text = self._registry_search_text(entity) if entity else entity_id.lower()
+            self._guessed_classes[entity_id] = self._guess_classification(text)
+
+    async def _assigned_trackers_for_person(self, person_entity: str) -> list[str]:
+        """Read the Person storage file and return assigned device_trackers."""
+        registry = er.async_get(self.hass)
+        person_registry_entry = registry.async_get(person_entity)
+
+        if person_registry_entry is None:
+            return []
+
+        person_unique_id = person_registry_entry.unique_id
+
+        store = Store(self.hass, PERSON_STORAGE_VERSION, PERSON_STORAGE_KEY)
+        stored = await store.async_load()
+
+        if not isinstance(stored, dict):
+            return []
+
+        items = stored.get("items", [])
+        if not isinstance(items, list):
+            items = stored.get("data", {}).get("items", [])
+
+        if not isinstance(items, list):
+            return []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            if item.get("id") != person_unique_id:
+                continue
+
+            trackers = item.get("device_trackers", [])
+            if not isinstance(trackers, list):
+                return []
+
+            return [
+                tracker
+                for tracker in trackers
+                if isinstance(tracker, str) and tracker.startswith("device_tracker.")
+            ]
+
+        return []
+
+    def _person_name(self) -> str:
+        """Return the selected Person friendly name for the entry title."""
+        person_entity = self._data.get(
+            CONF_PERSON_ENTITY,
+            self._config_entry.data.get(CONF_PERSON_ENTITY),
+        )
+
+        if not isinstance(person_entity, str):
+            return self._config_entry.title
+
+        person_state = self.hass.states.get(person_entity)
+
+        if person_state:
+            friendly_name = person_state.attributes.get("friendly_name")
+            if isinstance(friendly_name, str) and friendly_name:
+                return friendly_name
+
+        return person_entity
+
+    def _registry_search_text(self, entity: er.RegistryEntry | None) -> str:
+        """Build searchable text from an entity registry entry."""
+        if entity is None:
+            return ""
+
+        fields = [
+            entity.entity_id,
+            entity.name or "",
+            entity.original_name or "",
+            entity.platform or "",
+            str(entity.unique_id or ""),
+        ]
+
+        return " ".join(fields).lower()
+
+    def _guess_classification(self, text: str) -> str:
+        """Guess GPS, WiFi, BLE, or Other from entity metadata."""
+        if any(term in text for term in ["ble", "bluetooth", "bermuda", "espresense"]):
+            return CLASS_BLE
+
+        if any(
+            term in text
+            for term in [
+                "router",
+                "wifi",
+                "wi-fi",
+                "unifi",
+                "omada",
+                "openwrt",
+                "asuswrt",
+                "luci",
+                "fritz",
+                "ddwrt",
+            ]
+        ):
+            return CLASS_WIFI
+
+        if any(term in text for term in ["gps", "mobile_app", "icloud", "icloud3"]):
+            return CLASS_GPS
+
+        return CLASS_OTHER

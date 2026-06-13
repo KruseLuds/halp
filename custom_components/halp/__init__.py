@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 
-from .const import CONF_PERSON_ENTITY, DOMAIN, PLATFORMS
+from .const import (
+    CONF_BLE_ENTITIES,
+    CONF_GPS_ENTITIES,
+    CONF_PERSON_ENTITY,
+    CONF_ROUTER_ENTITIES,
+    DOMAIN,
+    PLATFORMS,
+)
 from .helpers import (
     analyze_sources,
     calculate_confidence,
@@ -23,6 +33,9 @@ from .history import async_record_history_sample
 _LOGGER = logging.getLogger(__name__)
 
 HISTORY_SAMPLE_INTERVAL = timedelta(minutes=5)
+
+PERSON_STORAGE_KEY = "person"
+PERSON_STORAGE_VERSION = 2
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -61,6 +74,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         config["person_missing"] = True
 
     hass.data[DOMAIN][entry.entry_id] = config
+
+    if not config.get("person_missing", False):
+        await _async_check_tracker_mismatch(hass, entry, config)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
@@ -107,6 +123,145 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def _async_check_tracker_mismatch(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    config: dict[str, Any],
+) -> None:
+    """Create a notification if Person trackers and HALP trackers differ."""
+    person_entity = config.get(CONF_PERSON_ENTITY)
+    if not isinstance(person_entity, str):
+        return
+
+    person_trackers = set(await _async_assigned_trackers_for_person(hass, person_entity))
+    halp_trackers = set(_configured_location_trackers(config))
+
+    person_only = sorted(person_trackers - halp_trackers)
+    halp_only = sorted(halp_trackers - person_trackers)
+
+    if not person_only and not halp_only:
+        await _async_dismiss_tracker_mismatch_notification(hass, entry)
+        return
+
+    title = f"HALP! tracker mismatch for {entry.title}"
+
+    message_parts = [
+        "HALP! detected that this entry's configured trackers do not match "
+        "the trackers currently assigned to the Home Assistant Person entity.",
+        "",
+        f"Person entity: `{person_entity}`",
+        "",
+    ]
+
+    if person_only:
+        message_parts.append("Trackers assigned to the Person but not used by HALP!:")
+        message_parts.extend([f"- `{tracker}`" for tracker in person_only])
+        message_parts.append("")
+
+    if halp_only:
+        message_parts.append("Trackers used by HALP! but not assigned to the Person:")
+        message_parts.extend([f"- `{tracker}`" for tracker in halp_only])
+        message_parts.append("")
+
+    message_parts.append(
+        "Open the HALP! integration entry and choose Configure to update "
+        "the tracker assignments."
+    )
+
+    await hass.services.async_call(
+        "persistent_notification",
+        "create",
+        {
+            "title": title,
+            "message": "\n".join(message_parts),
+            "notification_id": _tracker_mismatch_notification_id(entry),
+        },
+        blocking=False,
+    )
+
+
+def _configured_location_trackers(config: dict[str, Any]) -> list[str]:
+    """Return the device trackers configured as HALP! location sources."""
+    trackers: list[str] = []
+
+    for key in (CONF_GPS_ENTITIES, CONF_BLE_ENTITIES, CONF_ROUTER_ENTITIES):
+        value = config.get(key, [])
+        if isinstance(value, list):
+            trackers.extend(
+                tracker
+                for tracker in value
+                if isinstance(tracker, str) and tracker.startswith("device_tracker.")
+            )
+
+    return sorted(set(trackers))
+
+
+async def _async_assigned_trackers_for_person(
+    hass: HomeAssistant,
+    person_entity: str,
+) -> list[str]:
+    """Read the Person storage file and return assigned device_trackers."""
+    registry = er.async_get(hass)
+    person_registry_entry = registry.async_get(person_entity)
+
+    if person_registry_entry is None:
+        return []
+
+    person_unique_id = person_registry_entry.unique_id
+
+    store = Store(hass, PERSON_STORAGE_VERSION, PERSON_STORAGE_KEY)
+    stored = await store.async_load()
+
+    if not isinstance(stored, dict):
+        return []
+
+    items = stored.get("items", [])
+    if not isinstance(items, list):
+        items = stored.get("data", {}).get("items", [])
+
+    if not isinstance(items, list):
+        return []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        if item.get("id") != person_unique_id:
+            continue
+
+        trackers = item.get("device_trackers", [])
+        if not isinstance(trackers, list):
+            return []
+
+        return [
+            tracker
+            for tracker in trackers
+            if isinstance(tracker, str) and tracker.startswith("device_tracker.")
+        ]
+
+    return []
+
+
+async def _async_dismiss_tracker_mismatch_notification(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Dismiss an old mismatch notification when the entry is healthy again."""
+    await hass.services.async_call(
+        "persistent_notification",
+        "dismiss",
+        {
+            "notification_id": _tracker_mismatch_notification_id(entry),
+        },
+        blocking=False,
+    )
+
+
+def _tracker_mismatch_notification_id(entry: ConfigEntry) -> str:
+    """Return the stable persistent notification ID for one entry."""
+    return f"{DOMAIN}_tracker_mismatch_{entry.entry_id}"
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
