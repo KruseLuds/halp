@@ -15,6 +15,7 @@ from homeassistant.helpers.storage import Store
 from .const import (
     CONF_BLE_ENTITIES,
     CONF_GPS_ENTITIES,
+    CONF_IGNORED_ENTITIES,
     CONF_PERSON_ENTITY,
     CONF_ROUTER_ENTITIES,
     DOMAIN,
@@ -33,6 +34,16 @@ from .history import async_record_history_sample
 _LOGGER = logging.getLogger(__name__)
 
 HISTORY_SAMPLE_INTERVAL = timedelta(minutes=5)
+
+# HALP! already checks tracker mismatch during setup.
+#
+# This interval adds an automatic follow-up check so users do not need to
+# reload HALP! or restart Home Assistant after changing the trackers assigned
+# to a Home Assistant Person.
+#
+# A one minute interval is intentionally lightweight because the check only
+# reads the Person storage file and compares small tracker lists.
+TRACKER_MISMATCH_CHECK_INTERVAL = timedelta(minutes=1)
 
 PERSON_STORAGE_KEY = "person"
 PERSON_STORAGE_VERSION = 2
@@ -79,6 +90,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _async_check_tracker_mismatch(hass, entry, config)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
+
+    async def check_tracker_mismatch(now) -> None:
+        """Re-check Person tracker assignments while HALP! is running.
+
+        Home Assistant Person tracker assignments can be changed outside the
+        HALP! Configure flow.
+
+        Without this scheduled check, HALP! would only notice those changes
+        after a reload or restart. This keeps the existing startup behavior
+        while also making mismatch notifications appear and disappear
+        automatically after Person tracker changes are saved.
+        """
+        current_config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if not isinstance(current_config, dict):
+            return
+
+        if current_config.get("person_missing", False):
+            return
+
+        await _async_check_tracker_mismatch(hass, entry, current_config)
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            check_tracker_mismatch,
+            TRACKER_MISMATCH_CHECK_INTERVAL,
+        )
+    )
 
     async def record_history_sample(now) -> None:
         """Record one rolling history sample for this HALP! entry."""
@@ -136,10 +175,23 @@ async def _async_check_tracker_mismatch(
         return
 
     person_trackers = set(await _async_assigned_trackers_for_person(hass, person_entity))
-    halp_trackers = set(_configured_location_trackers(config))
+    halp_location_trackers = set(_configured_location_trackers(config))
+    ignored_trackers = set(_configured_ignored_trackers(config))
 
-    person_only = sorted(person_trackers - halp_trackers)
-    halp_only = sorted(halp_trackers - person_trackers)
+    # Ignore is intentionally different from Other.
+    #
+    # Location trackers are scored by HALP!.
+    # Ignored trackers are not scored, but they are considered accounted for
+    # when checking whether the Home Assistant Person still has extra assigned
+    # trackers. This lets a user keep a tracker assigned to the Person while
+    # deliberately excluding it from HALP! without receiving a mismatch warning.
+    #
+    # Other trackers are not included here. Other means "not a HALP location
+    # source," but it does not suppress mismatch warnings.
+    accounted_trackers = halp_location_trackers | ignored_trackers
+
+    person_only = sorted(person_trackers - accounted_trackers)
+    halp_only = sorted(halp_location_trackers - person_trackers)
 
     if not person_only and not halp_only:
         await _async_dismiss_tracker_mismatch_notification(hass, entry)
@@ -156,7 +208,7 @@ async def _async_check_tracker_mismatch(
     ]
 
     if person_only:
-        message_parts.append("Trackers assigned to the Person but not used by HALP!:")
+        message_parts.append("Trackers assigned to the Person but not used or ignored by HALP!:")
         message_parts.extend([f"- `{tracker}`" for tracker in person_only])
         message_parts.append("")
 
@@ -167,7 +219,8 @@ async def _async_check_tracker_mismatch(
 
     message_parts.append(
         "Open the HALP! integration entry and choose Configure to update "
-        "the tracker assignments."
+        "the tracker assignments. Use Ignore for assigned Person trackers "
+        "that should be intentionally excluded from HALP! analysis."
     )
 
     await hass.services.async_call(
@@ -196,6 +249,22 @@ def _configured_location_trackers(config: dict[str, Any]) -> list[str]:
             )
 
     return sorted(set(trackers))
+
+
+def _configured_ignored_trackers(config: dict[str, Any]) -> list[str]:
+    """Return device trackers intentionally ignored by HALP!."""
+    value = config.get(CONF_IGNORED_ENTITIES, [])
+
+    if not isinstance(value, list):
+        return []
+
+    return sorted(
+        set(
+            tracker
+            for tracker in value
+            if isinstance(tracker, str) and tracker.startswith("device_tracker.")
+        )
+    )
 
 
 async def _async_assigned_trackers_for_person(

@@ -11,12 +11,12 @@
       },
       "classify_person_sources_v2": {
         "title": "Classify assigned location sources",
-        "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, WiFi/router, BLE, or Other.",
+        "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, BLE, WiFi/router, Other, or Ignore. Ignore excludes the assigned tracker from HALP! analysis and suppresses tracker mismatch warnings for that tracker.",
         "data": {}
       }
     },
     "error": {
-      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi/router, or BLE."
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router."
     },
     "abort": {
       "already_configured": "This Person entity is already configured in HALP!."
@@ -27,6 +27,15 @@
       "init": {
         "title": "Configure HALP!",
         "description": "Adjust HALP!'s reliability threshold and source weights."
+      },
+      "person": {
+        "title": "Configure HALP! Person",
+        "description": "Confirm the Home Assistant Person entity HALP! should analyze. The next step lets you classify assigned trackers as GPS, BLE, WiFi/router, Other, or Ignore."
+      },
+      "classify_person_sources": {
+        "title": "Classify assigned location sources",
+        "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, BLE, WiFi/router, Other, or Ignore. Ignore excludes the assigned tracker from HALP! analysis and suppresses tracker mismatch warnings for that tracker.",
+        "data": {}
       },
       "tuning": {
         "title": "Tune HALP! reliability scoring",
@@ -40,7 +49,7 @@
       }
     },
     "error": {
-      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi/router, or BLE."
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router."
     }
   }
 }

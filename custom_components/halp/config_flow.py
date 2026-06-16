@@ -17,6 +17,7 @@ from .const import (
     CONF_BLE_WEIGHT,
     CONF_GPS_ENTITIES,
     CONF_GPS_WEIGHT,
+    CONF_IGNORED_ENTITIES,
     CONF_PERSON_ENTITY,
     CONF_PERSON_UNIQUE_ID,
     CONF_RELIABLE_THRESHOLD,
@@ -36,11 +37,16 @@ CLASS_GPS = "GPS"
 CLASS_WIFI = "WiFi"
 CLASS_BLE = "BLE"
 CLASS_OTHER = "Other"
+CLASS_IGNORE = "Ignore"
 
 
 def classification_options() -> list[str]:
     """Return the choices shown when classifying tracker sources."""
-    return [CLASS_GPS, CLASS_WIFI, CLASS_BLE, CLASS_OTHER]
+    # Order matters because this is the dropdown order shown to users.
+    # GPS, BLE, and WiFi are HALP! scoring sources.
+    # Other remains a normal non-location classification.
+    # Ignore means the tracker is intentionally excluded from HALP!.
+    return [CLASS_GPS, CLASS_BLE, CLASS_WIFI, CLASS_OTHER, CLASS_IGNORE]
 
 
 class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -92,7 +98,7 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_PERSON_UNIQUE_ID] = person_unique_id
 
             # Pull device_trackers assigned to this Person so the user can
-            # classify each one as GPS, WiFi, BLE, or Other.
+            # classify each one as GPS, BLE, WiFi, Other, or Ignore.
             await self._discover_sources(person_entity)
 
             return await self.async_step_classify_person_sources_v2()
@@ -117,7 +123,12 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            gps_entities, ble_entities, router_entities = self._classified_groups(
+            (
+                gps_entities,
+                ble_entities,
+                router_entities,
+                ignored_entities,
+            ) = self._classified_groups(
                 user_input,
                 self._assigned_trackers,
             )
@@ -129,6 +140,7 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_GPS_ENTITIES] = gps_entities
                 self._data[CONF_BLE_ENTITIES] = ble_entities
                 self._data[CONF_ROUTER_ENTITIES] = router_entities
+                self._data[CONF_IGNORED_ENTITIES] = ignored_entities
 
                 # Save default tuning values. The user can change these later
                 # from the Configure button on the integration entry.
@@ -158,11 +170,12 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self,
         user_input: dict[str, Any],
         trackers: list[str],
-    ) -> tuple[list[str], list[str], list[str]]:
-        """Split tracker entity IDs into GPS, BLE, and WiFi groups."""
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        """Split tracker IDs into GPS, BLE, WiFi, and Ignore groups."""
         gps_entities: list[str] = []
         ble_entities: list[str] = []
         router_entities: list[str] = []
+        ignored_entities: list[str] = []
 
         for entity_id in trackers:
             classification = user_input.get(entity_id, CLASS_OTHER)
@@ -173,8 +186,13 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ble_entities.append(entity_id)
             elif classification == CLASS_WIFI:
                 router_entities.append(entity_id)
+            elif classification == CLASS_IGNORE:
+                # Ignore is deliberately stored so the mismatch checker knows
+                # this Person-assigned tracker was excluded on purpose. It is
+                # not a scoring source and is not analyzed by HALP!.
+                ignored_entities.append(entity_id)
 
-        return gps_entities, ble_entities, router_entities
+        return gps_entities, ble_entities, router_entities, ignored_entities
 
     def _classification_schema(
         self,
@@ -297,7 +315,7 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return " ".join(fields).lower()
 
     def _guess_classification(self, text: str) -> str:
-        """Guess GPS, WiFi, BLE, or Other from entity metadata."""
+        """Guess GPS, BLE, WiFi, or Other from entity metadata."""
         if any(term in text for term in ["ble", "bluetooth", "bermuda", "espresense"]):
             return CLASS_BLE
 
@@ -401,7 +419,12 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            gps_entities, ble_entities, router_entities = self._classified_groups(
+            (
+                gps_entities,
+                ble_entities,
+                router_entities,
+                ignored_entities,
+            ) = self._classified_groups(
                 user_input,
                 self._assigned_trackers,
             )
@@ -412,6 +435,7 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                 self._data[CONF_GPS_ENTITIES] = gps_entities
                 self._data[CONF_BLE_ENTITIES] = ble_entities
                 self._data[CONF_ROUTER_ENTITIES] = router_entities
+                self._data[CONF_IGNORED_ENTITIES] = ignored_entities
 
                 return await self.async_step_tuning()
 
@@ -447,6 +471,7 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_GPS_ENTITIES: self._data.get(CONF_GPS_ENTITIES, []),
                     CONF_BLE_ENTITIES: self._data.get(CONF_BLE_ENTITIES, []),
                     CONF_ROUTER_ENTITIES: self._data.get(CONF_ROUTER_ENTITIES, []),
+                    CONF_IGNORED_ENTITIES: self._data.get(CONF_IGNORED_ENTITIES, []),
                     CONF_RELIABLE_THRESHOLD: user_input[CONF_RELIABLE_THRESHOLD],
                     CONF_GPS_WEIGHT: user_input[CONF_GPS_WEIGHT],
                     CONF_BLE_WEIGHT: user_input[CONF_BLE_WEIGHT],
@@ -527,11 +552,12 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any],
         trackers: list[str],
-    ) -> tuple[list[str], list[str], list[str]]:
-        """Split tracker entity IDs into GPS, BLE, and WiFi groups."""
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        """Split tracker IDs into GPS, BLE, WiFi, and Ignore groups."""
         gps_entities: list[str] = []
         ble_entities: list[str] = []
         router_entities: list[str] = []
+        ignored_entities: list[str] = []
 
         for entity_id in trackers:
             classification = user_input.get(entity_id, CLASS_OTHER)
@@ -542,8 +568,13 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                 ble_entities.append(entity_id)
             elif classification == CLASS_WIFI:
                 router_entities.append(entity_id)
+            elif classification == CLASS_IGNORE:
+                # Ignore is deliberately stored so the mismatch checker knows
+                # this Person-assigned tracker was excluded on purpose. It is
+                # not a scoring source and is not analyzed by HALP!.
+                ignored_entities.append(entity_id)
 
-        return gps_entities, ble_entities, router_entities
+        return gps_entities, ble_entities, router_entities, ignored_entities
 
     def _classification_schema(
         self,
@@ -609,6 +640,10 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
 
             if entity_id in current.get(CONF_ROUTER_ENTITIES, []):
                 self._guessed_classes[entity_id] = CLASS_WIFI
+                continue
+
+            if entity_id in current.get(CONF_IGNORED_ENTITIES, []):
+                self._guessed_classes[entity_id] = CLASS_IGNORE
                 continue
 
             entity = registry.async_get(entity_id)
@@ -692,7 +727,7 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
         return " ".join(fields).lower()
 
     def _guess_classification(self, text: str) -> str:
-        """Guess GPS, WiFi, BLE, or Other from entity metadata."""
+        """Guess GPS, BLE, WiFi, or Other from entity metadata."""
         if any(term in text for term in ["ble", "bluetooth", "bermuda", "espresense"]):
             return CLASS_BLE
 

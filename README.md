@@ -47,7 +47,7 @@ HALP! is especially useful when:
 * Multiple location sources produce conflicting results
 * Users want objective measurements of tracker reliability
 
-HALP! helps identify which sources deserve trust and which sources should be improved, replaced, or ignored.
+HALP! helps identify which sources deserve trust and which sources should be improved, replaced, classified as Other, or intentionally ignored.
 
 ---
 
@@ -59,6 +59,7 @@ HALP! analyzes:
 * GPS location sources
 * BLE location sources
 * Router/WiFi location sources
+* Intentionally ignored Person-assigned trackers
 * Source freshness
 * Source agreement
 * Source conflicts
@@ -66,7 +67,7 @@ HALP! analyzes:
 
 HALP! then produces:
 
-* A vetted location assessment
+* A vetted location assessment (Home, Away, or Unknown)
 * A confidence score
 * A human-readable explanation
 * Source-by-source analysis
@@ -113,6 +114,38 @@ Before using HALP!, each person should first be configured in Home Assistant usi
 Each Person should have one or more location sources assigned to it, such as GPS trackers, BLE trackers, and router/WiFi trackers. Home Assistant combines those sources to determine the Person's current location, while HALP! analyzes the quality and reliability of those decisions.
 
 HALP! works best when Home Assistant is configured with multiple independent location sources.
+
+## Tracker Classification During Setup
+
+During setup and Configure, HALP! shows the device trackers currently assigned to the selected Home Assistant Person. Each tracker can be classified as one of the following:
+
+| Classification | Used for HALP! scoring | Suppresses tracker mismatch warnings | Purpose |
+| -------------- | ---------------------- | ------------------------------------ | ------- |
+| GPS | Yes | Yes | Long-range location evidence, usually from the Home Assistant Companion App, iCloud3, or another GPS tracker. |
+| BLE | Yes | Yes | Local presence evidence from Bluetooth-based tracking such as Bermuda, ESPresense, Bluetooth proxies, or companion-app BLE. |
+| WiFi | Yes | Yes | Router or WiFi presence evidence from integrations such as UniFi, Omada, OpenWRT, or other router trackers. |
+| Other | No | No | A normal non-location classification. HALP! does not score it, and it does not hide mismatch warnings. |
+| Ignore | No | Yes | A tracker intentionally excluded from HALP!. Use this when a tracker should remain assigned to the Person but should not be analyzed by HALP!. |
+
+Other and Ignore are intentionally different.
+
+Other means the tracker is not one of HALP!'s scored location source types. If that tracker remains assigned to the Home Assistant Person, HALP! may still warn that the Person has an assigned tracker that HALP! is not using.
+
+Ignore means the tracker is intentionally excluded. Ignored trackers are not used for scoring, confidence, consensus, source health, history samples, or source details, but they are treated as accounted for when HALP! checks for tracker mismatch warnings.
+
+### Important: Ignore Only Affects HALP!
+
+Ignore only affects HALP!'s analysis.
+
+HALP! does not modify Home Assistant Person entities and cannot change how Home Assistant calculates a Person's state.
+
+If a tracker remains assigned to a Home Assistant Person but is classified as Ignore within HALP!, Home Assistant will continue using that tracker when determining the Person's Home, Away, and zone states.
+
+HALP! will exclude the tracker from its own analysis, scoring, confidence calculations, consensus calculations, source health calculations, historical statistics, and diagnostics.
+
+If a tracker is ignored because it produces unreliable location information, users should consider using HALP!'s Vetted Location sensor for location-based automations instead of relying solely on the Home Assistant Person state.
+
+HALP! also continuously monitors Person tracker assignments. If a tracker is added to or removed from a Home Assistant Person, HALP! will automatically create or clear tracker mismatch notifications without requiring a Home Assistant restart or HALP! reload.
 
 No single tracking method is perfect. GPS can be delayed, BLE can have range limitations, and router tracking can miss devices due to power-saving features or WiFi roaming behavior.
 
@@ -203,6 +236,8 @@ HALP! evaluates how well those sources agree, how recently they reported, and ho
 HALP! evaluates all configured location sources.
 
 Supported source categories:
+
+Ignored trackers are not supported source categories for scoring. They are saved only so HALP! knows a Person-assigned tracker was excluded on purpose.
 
 ## GPS Sources
 
@@ -477,6 +512,10 @@ would produce:
 ```text
 sensor.halp_john_vetted_location
 ```
+
+Note: The Vetted Location sensor is HALP!'s own location determination.
+
+Meaning, if one or more Person-assigned trackers are intentionally classified as Ignore, this sensor is generally the recommended location sensor to use for automations because it reflects HALP!'s analyzed location result rather than Home Assistant's default Person calculation.
 
 ---
 
