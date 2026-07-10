@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="brand/logo.png" width="350" alt="HALP! Logo">
+  <img src="https://raw.githubusercontent.com/KruseLuds/halp/main/brand/logo.png" width="350" alt="HALP! Logo">
 </p>
 
 <h1 align="center">HALP!</h1>

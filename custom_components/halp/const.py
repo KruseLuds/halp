@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "0.0.2"
+VERSION = "1.0.0"
 
 PLATFORMS = ["sensor", "binary_sensor"]
 
@@ -14,7 +14,6 @@ CONF_PERSON_UNIQUE_ID = "person_unique_id"
 CONF_GPS_ENTITIES = "gps_entities"
 CONF_BLE_ENTITIES = "ble_entities"
 CONF_ROUTER_ENTITIES = "router_entities"
-CONF_IGNORED_ENTITIES = "ignored_entities"
 
 CONF_BATTERY_LEVEL_ENTITY = "battery_level_entity"
 CONF_BATTERY_STATE_ENTITY = "battery_state_entity"
