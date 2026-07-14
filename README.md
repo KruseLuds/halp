@@ -556,8 +556,6 @@ These values help explain confidence but are not primary location sources.
 
 # Dashboard Examples
 
-> **Note:** The confidence and consensus charts shown below are currently only partially populated. The most recent HALP! build included cleanup and removal of development and test history data. These screenshots will be updated after approximately two weeks of production data collection.
-
 ## Dashboard Overview
 
 <p align="center">
