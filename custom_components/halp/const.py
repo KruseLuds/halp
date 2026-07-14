@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 PLATFORMS = ["sensor", "binary_sensor"]
 

@@ -107,6 +107,139 @@ This distinction is the foundation of the project.
 
 ---
 
+
+# Installation
+
+> [!IMPORTANT]
+>
+> ## **PLEASE READ THIS FIRST**
+>
+> **HALP! analyzes the presence system you have already built in Home Assistant. It does not create Person entities or location trackers for you.**
+>
+> # **[READ: Building a Reliable Home Assistant Presence System](docs/Building_a_Reliable_Presence_System.md)**
+>
+> **That guide explains how to create a Person, configure GPS, BLE, and router/WiFi trackers, prepare Android and iPhone devices, prevent MAC-address changes from breaking router tracking, obtain a phone IRK for Private BLE Device, and assign the resulting trackers to the Person.**
+>
+> **Reading the guide first is strongly recommended. HALP! can analyze weak or incomplete tracking, but it cannot turn an incorrectly configured tracker into a reliable one.**
+
+## Prerequisites
+
+At minimum, you need:
+
+* A working Home Assistant installation
+* HACS installed
+* One Home Assistant Person entity
+* At least one `device_tracker` assigned to that Person
+
+For a more complete HALP! analysis, the Person should normally have several independent tracker types:
+
+* GPS from the Home Assistant Companion App or another GPS-capable integration
+* BLE presence from Private BLE Device, Bermuda, ESPresense, or another BLE solution
+* Router/WiFi presence from a supported router or network-controller integration
+
+GPS, BLE, and router/WiFi are not all mandatory. HALP! supports zero or more trackers in each category, but at least one tracker must be classified as GPS, BLE, or WiFi during setup.
+
+## Install HALP! Through HACS
+
+1. Open **HACS** in Home Assistant.
+2. Open **Integrations**.
+3. Search for **HALP!**
+4. Select **HALP! (HA Location & Presence analyzer)**.
+5. Select **Download**.
+6. Choose the current release and complete the download.
+7. Restart Home Assistant when HACS requests it.
+
+If HALP! is not yet listed in the default HACS catalog, add the repository as a custom repository:
+
+1. Open **HACS**.
+2. Open the three-dot menu.
+3. Select **Custom repositories**.
+4. Enter the HALP! GitHub repository address.
+5. Select **Integration** as the category.
+6. Add the repository, then download HALP!.
+
+## Add the HALP! Integration
+
+After Home Assistant restarts:
+
+1. Go to **Settings → Devices & services**.
+2. Select **Add integration**.
+3. Search for **HALP!**
+4. Select **HALP!**
+5. Select the Home Assistant Person HALP! should analyze.
+
+HALP! reads the device trackers currently assigned to that Person and presents each tracker for classification.
+
+## Classify Every Assigned Tracker
+
+For each tracker shown, choose one classification:
+
+* **GPS** for long-range geographic tracking, commonly from the Home Assistant Companion App or iCloud3
+* **BLE** for Bluetooth-based home or room presence
+* **WiFi** for router or network-controller presence tracking
+* **Other** for a tracker that is not a HALP! location source but should still be reported as an unhandled Person tracker
+* **Ignore** for a tracker that should remain assigned to the Home Assistant Person but should be intentionally excluded from HALP! analysis and mismatch warnings
+
+At least one tracker must be classified as GPS, BLE, or WiFi.
+
+Select **Submit** when all trackers have been classified.
+
+## Configure Reliability Settings
+
+After setup, open:
+
+**Settings → Devices & services → HALP! → Configure**
+
+The Configure flow lets you:
+
+* Confirm or change the Person
+* Reclassify the Person's currently assigned trackers
+* Adjust the reliable-confidence threshold
+* Adjust the voting weights for GPS, BLE, and router/WiFi sources
+
+The default values are intended to provide a reasonable starting point. It is usually best to collect real data before changing the weights.
+
+## Confirm the Installation
+
+After setup:
+
+1. Open **Settings → Devices & services → Entities**.
+2. Search for `halp_`.
+3. Confirm HALP! entities were created for the selected Person.
+4. Open the Vetted Location, Location Confidence, Consensus Score, Source Health, and Location Explanation entities.
+5. Confirm their source attributes contain the trackers you classified as GPS, BLE, or WiFi.
+
+Ignored trackers should appear in HALP! configuration and diagnostics where appropriate, but they should not be included in scoring.
+
+## Add Another Person
+
+HALP! creates one config entry for each Person.
+
+To analyze another Person:
+
+1. Go to **Settings → Devices & services**.
+2. Select **Add integration**.
+3. Add **HALP!** again.
+4. Select the next Person.
+5. Classify that Person's trackers.
+
+Repeat for every Person you want HALP! to analyze.
+
+## After Changing Person Tracker Assignments
+
+If you later add or remove a tracker from the Home Assistant Person, HALP! periodically checks the assigned tracker list.
+
+HALP! will create a persistent notification when:
+
+* A tracker is assigned to the Person but is not classified as GPS, BLE, WiFi, or Ignore in HALP!
+* A GPS, BLE, or WiFi tracker remains configured in HALP! but is no longer assigned to the Person
+
+Open the HALP! integration entry and select **Configure** to update classifications.
+
+Choose **Ignore** only when the tracker should remain assigned to the Person but should not participate in HALP! analysis.
+
+---
+
 # Building a Reliable Presence System
 
 Before using HALP!, each person should first be configured in Home Assistant using a standard Person entity.
@@ -484,13 +617,13 @@ Search for:
 halp_
 ```
 
-You will see sensors similar to:
+You will see sensors similar to (assuming you have the area set to "roaming" and set the name to "john"):
 
 ```text
-sensor.halp_john_vetted_location
-sensor.halp_john_location_confidence
-sensor.halp_john_consensus_score
-sensor.halp_john_source_health
+sensor.roaming_halp_john_vetted_location
+sensor.roaming_halp_john_location_confidence
+sensor.roaming_halp_john_consensus_score
+sensor.roaming_halp_john_source_health
 ```
 
 Replace placeholders such as:
@@ -510,16 +643,43 @@ Example:
 would produce:
 
 ```text
-sensor.halp_john_vetted_location
+sensor.roaming_halp_john_vetted_location
 ```
 
 Note: The Vetted Location sensor is HALP!'s own location determination.
 
-Meaning, if one or more Person-assigned trackers are intentionally classified as Ignore, this sensor is generally the recommended location sensor to use for automations because it reflects HALP!'s analyzed location result rather than Home Assistant's default Person calculation.
+Meaning, if one or more Person-assigned trackers are intentionally classified as Ignore, this HALP! sensor is generally the recommended location sensor to use for automations instead of the state of the sensor typically named:
+
+```text
+person.<person_name_1>
+```
+
+- because it reflects HALP!'s analyzed location result rather than Home Assistant's default Person location calculation.
 
 ---
 
 ## Single Person Example Dashboard
+
+This example uses one HALP! person entry.
+
+Replace:
+
+```text
+<person_name>
+```
+
+with the actual HALP! entity/sensor slugs/name from your Home Assistant system.
+
+(Note, the "device_tracker" GPS sensor name typically comes from the HA Companion App on the phone. For more details, please reread [Building a Reliable Home Assistant Presence System](docs/Building_a_Reliable_Presence_System.md) about device trackers.)
+
+And then replace:
+
+```text
+<person_name's initials!>
+```
+
+with their actual initials.
+
 
 ```yaml
 title: HALP!
@@ -531,48 +691,49 @@ views:
 
     cards:
       - type: entities
-        title: <person_name_1>
+        title: <person_name>
         entities:
-          - entity: sensor.halp_<person_name_1>_vetted_location
+          - entity: sensor.halp_<person_name>_vetted_location
             name: Location
-          - entity: sensor.halp_<person_name_1>_location_confidence
+          - entity: sensor.halp_<person_name>_location_confidence
             name: Confidence
-          - entity: sensor.halp_<person_name_1>_consensus_score
+          - entity: sensor.halp_<person_name>_consensus_score
             name: Consensus
-          - entity: sensor.halp_<person_name_1>_source_health
+          - entity: sensor.halp_<person_name>_source_health
             name: Health
+
+      - type: map
+        entities:
+          - entity: device_tracker.<person_name>_iphone_17_pro_gps
+            name: <person_name's initials!>
+            theme_mode: light
+            hours_to_show: 48
 
       - type: history-graph
         title: Confidence
         hours_to_show: 336
         entities:
-          - entity: sensor.halp_<person_name_1>_confidence_trend
+          - entity: sensor.halp_<person_name>_confidence_trend
             name: Person #1
 
       - type: history-graph
         title: Consensus
         hours_to_show: 336
         entities:
-          - entity: sensor.halp_<person_name_1>_consensus_trend
-            name: Person #1
-
-      - type: entities
-        title: History (14 days)
-        entities:
-          - entity: sensor.halp_<person_name_1>_history_summary
+          - entity: sensor.halp_<person_name>_consensus_trend
             name: Person #1
 
       - type: entities
         title: Diagnostics
         entities:
-          - entity: sensor.halp_<person_name_1>_conflict_details
+          - entity: sensor.halp_<person_name>_conflict_details
             name: Person #1 conflicts
             icon: mdi:alert-circle-outline
-          - entity: sensor.halp_<person_name_1>_stale_sources
+          - entity: sensor.halp_<person_name>_stale_sources
             name: Person #1 stale
-          - entity: sensor.halp_<person_name_1>_last_reliable_change
+          - entity: sensor.halp_<person_name>_last_reliable_change
             name: Person #1 last reliable
-          - entity: sensor.halp_<person_name_1>_location_explanation
+          - entity: sensor.halp_<person_name>_location_explanation
             name: Explanation
             icon: mdi:text-box-search
 ```
@@ -590,7 +751,19 @@ Replace:
 <person_name_2>
 ```
 
-with the actual HALP! entity slugs from your Home Assistant system.
+with the actual HALP! entity/sensor slugs/names from your Home Assistant system.
+
+And then replace:
+
+```text
+<person_name_1's initials!>
+<person_name_2's initials!>
+```
+
+with their actual initials.
+
+(Note, the "device_tracker" GPS sensor names typically comes from the HA Companion App on the phone. For more details, please reread [Building a Reliable Home Assistant Presence System](docs/Building_a_Reliable_Presence_System.md) about device trackers.)
+
 
 ```yaml
 title: HALP!
@@ -608,30 +781,45 @@ views:
           - type: vertical-stack
             cards:
               - type: entities
-                title: <person_name_1>
+                title: 👩🏻 <person_name_1>
                 entities:
-                  - entity: sensor.halp_<person_name_1>_vetted_location
+                  - entity: sensor.roaming_<person_name_1>_vetted_location
                     name: Location
-                  - entity: sensor.halp_<person_name_1>_location_confidence
+                  - entity: sensor.roaming_<person_name_1>_location_confidence
                     name: Confidence
-                  - entity: sensor.halp_<person_name_1>_consensus_score
+                  - entity: sensor.roaming_<person_name_1>_consensus_score
                     name: Consensus
-                  - entity: sensor.halp_<person_name_1>_source_health
+                  - entity: sensor.roaming_<person_name_1>_source_health
                     name: Health
 
           - type: vertical-stack
             cards:
               - type: entities
-                title: <person_name_2>
+                title: 👱‍♂️ <person_name_2>
                 entities:
-                  - entity: sensor.halp_<person_name_2>_vetted_location
+                  - entity: sensor.roaming_<person_name_2>_vetted_location
                     name: Location
-                  - entity: sensor.halp_<person_name_2>_location_confidence
+                  - entity: sensor.roaming_<person_name_2>_location_confidence
                     name: Confidence
-                  - entity: sensor.halp_<person_name_2>_consensus_score
+                  - entity: sensor.roaming_<person_name_2>_consensus_score
                     name: Consensus
-                  - entity: sensor.halp_<person_name_2>_source_health
+                  - entity: sensor.roaming_<person_name_2>_source_health
                     name: Health
+
+      - type: horizontal-stack
+        cards:
+          - type: map
+            entities:
+              - entity: device_tracker.<person_name_1>_iphone_17_pro_gps
+                name: <person_name_1's initials!>
+                theme_mode: light
+                hours_to_show: 48
+          - type: map
+            entities:
+              - entity: device_tracker.<person_name_2>_galaxy_s26_ultra_gps
+                name: <person_name_2's initials!>
+                theme_mode: light
+                hours_to_show: 48
 
       - type: grid
         columns: 2
@@ -641,56 +829,47 @@ views:
             title: Confidence
             hours_to_show: 336
             entities:
-              - entity: sensor.halp_<person_name_1>_confidence_trend
-                name: Person #1
-              - entity: sensor.halp_<person_name_2>_confidence_trend
-                name: Person #2
+              - entity: sensor.roaming_<person_name_1>_confidence_trend
+                name: Cathy
+              - entity: sensor.roaming_<person_name_2>_confidence_trend
+                name: Kruse
 
           - type: history-graph
             title: Consensus
             hours_to_show: 336
             entities:
-              - entity: sensor.halp_<person_name_1>_consensus_trend
-                name: Person #1
-              - entity: sensor.halp_<person_name_2>_consensus_trend
-                name: Person #2
+              - entity: sensor.roaming_<person_name_1>_consensus_trend
+                name: Cathy
+              - entity: sensor.roaming_<person_name_2>_consensus_trend
+                name: Kruse
 
       - type: vertical-stack
         cards:
-          - type: entities
-            title: History (14 days)
-            entities:
-              - entity: sensor.halp_<person_name_1>_history_summary
-                name: Person #1
-              - entity: sensor.halp_<person_name_2>_history_summary
-                name: Person #2
-
           - type: custom:expander-card
             title: Diagnostics
             padding: true
             clear: false
             cards:
-              - type: entities
-                entities:
-                  - entity: sensor.halp_<person_name_1>_conflict_details
-                    name: Person #1 conflicts
+               - type: entities 
+                 entities:
+                  - entity: sensor.roaming_<person_name_1>_conflict_details
+                    name: <person_name_1> conflicts
                     icon: mdi:alert-circle-outline
-                  - entity: sensor.halp_<person_name_1>_stale_sources
-                    name: Person #1 stale
-                  - entity: sensor.halp_<person_name_1>_last_reliable_change
-                    name: Person #1 last reliable
-                  - entity: sensor.halp_<person_name_1>_location_explanation
+                  - entity: sensor.roaming_<person_name_1>_stale_sources
+                    name: <person_name_1> stale
+                  - entity: sensor.roaming_<person_name_1>_last_reliable_change
+                    name: <person_name_1> last reliable
+                  - entity: sensor.roaming_<person_name_1>_location_explanation
                     name: Explanation
-                    icon: mdi:text-box-search
-
-                  - entity: sensor.halp_<person_name_2>_conflict_details
-                    name: Person #2 conflicts
+                    icon: mdi:text-box-search                    
+                  - entity: sensor.roaming_<person_name_2>_conflict_details
+                    name: <person_name_2> conflicts
                     icon: mdi:alert-circle-outline
-                  - entity: sensor.halp_<person_name_2>_stale_sources
-                    name: Person #2 stale
-                  - entity: sensor.halp_<person_name_2>_last_reliable_change
-                    name: Person #2 last reliable
-                  - entity: sensor.halp_<person_name_2>_location_explanation
+                  - entity: sensor.roaming_<person_name_2>_stale_sources
+                    name: <person_name_2> stale
+                  - entity: sensor.roaming_<person_name_2>_last_reliable_change
+                    name: <person_name_1> last reliable
+                  - entity: sensor.roaming_<person_name_2>_location_explanation
                     name: Explanation
                     icon: mdi:text-box-search
 ```
