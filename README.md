@@ -155,12 +155,12 @@ If HALP! is not yet listed in the default HACS catalog, add the repository as a 
 2. Open the three-dot menu.
 3. Select **Custom repositories**
 4. In the **Repository** field, enter:
-
    ```text
    https://github.com/KruseLuds/halp
    ```
 5. Select **Integration** as the category.
 6. Add the repository, then download HALP!.
+7. Restart Home Assistant when HACS requests it.
 
 ## Add the HALP! Integration
 
