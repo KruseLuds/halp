@@ -19,6 +19,13 @@
 - Installation guide
 - Local branding
 
+### Version 1.0.3 Maintenance Update
+
+- Vetted Location now uses Home Assistant-compatible `home`, `not_home`, and `unknown` entity states
+- Home Assistant continues to display `not_home` as Away in the user interface
+- Legacy incoming `away` source values are normalized to `not_home`
+- Documentation and automation guidance updated for the native state vocabulary
+
 ---
 
 ## Version 1.1

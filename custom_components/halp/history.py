@@ -31,6 +31,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from .const import LOCATION_HOME, LOCATION_NOT_HOME, LOCATION_UNKNOWN
 from .helpers import SourceResult
 
 STORAGE_KEY = "halp_history"
@@ -128,7 +129,7 @@ def build_history_sample(
             [
                 result
                 for result in results
-                if result.normalized_state in ("home", "away") and not result.usable
+                if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
             ]
         ),
         "sources": [
@@ -199,11 +200,11 @@ def update_daily_summary(
         )
 
     vetted_location = sample.get("vetted_location")
-    if vetted_location == "home":
+    if vetted_location == LOCATION_HOME:
         daily_summary["home_samples"] = daily_summary.get("home_samples", 0) + 1
-    elif vetted_location == "away":
+    elif vetted_location in (LOCATION_NOT_HOME, "away"):
         daily_summary["away_samples"] = daily_summary.get("away_samples", 0) + 1
-    elif vetted_location == "unknown":
+    elif vetted_location == LOCATION_UNKNOWN:
         daily_summary["unknown_samples"] = daily_summary.get("unknown_samples", 0) + 1
 
     source_health = sample.get("source_health")

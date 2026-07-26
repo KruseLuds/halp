@@ -67,7 +67,7 @@ HALP! analyzes:
 
 HALP! then produces:
 
-* A vetted location assessment (Home, Away, or Unknown)
+* A vetted location assessment (Home, Away, or Unknown), using Home Assistant-compatible entity states: `home`, `not_home`, and `unknown`
 * A confidence score
 * A human-readable explanation
 * Source-by-source analysis
@@ -485,16 +485,16 @@ HALP! measures actual performance rather than relying on assumptions.
 
 # Home Visit Definition
 
-A Home Visit begins when the selected reference source transitions:
+A Home Visit begins when the selected reference source transitions from Away to Home:
 
 ```text
-Away -> Home
+not_home -> home
 ```
 
-A Home Visit ends when the selected reference source transitions:
+A Home Visit ends when the selected reference source transitions from Home to Away:
 
 ```text
-Home -> Away
+home -> not_home
 ```
 
 Everything in between is considered one Home Visit.
@@ -519,7 +519,7 @@ Current Sources
 | ------ | ----- | ------- | ----------- |
 | GPS | Home | 2 min ago | 99% |
 | BLE | Home | 1 min ago | 94% |
-| Router | Away | 12 min ago | 18% |
+| Router | not_home | 12 min ago | 18% |
 
 Result
 
@@ -649,6 +649,16 @@ sensor.roaming_halp_john_vetted_location
 ```
 
 Note: The Vetted Location sensor is HALP!'s own location determination.
+
+The Vetted Location sensor uses Home Assistant-compatible location states:
+
+```text
+home
+not_home
+unknown
+```
+
+Home Assistant normally presents `not_home` as **Away** in the user interface. Automations and templates must compare against the actual entity state `not_home`, not the display label `Away`.
 
 Meaning, if one or more Person-assigned trackers are intentionally classified as Ignore, this HALP! sensor is generally the recommended location sensor to use for automations instead of the state of the sensor typically named:
 

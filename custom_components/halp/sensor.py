@@ -43,6 +43,8 @@ from .const import (
     CONF_SSID_ENTITY,
     DEFAULT_RELIABLE_THRESHOLD,
     DOMAIN,
+    LOCATION_HOME,
+    LOCATION_NOT_HOME,
     NAME,
 )
 from .helpers import (
@@ -104,6 +106,15 @@ def reliable_threshold(config: dict[str, Any]) -> int:
         return DEFAULT_RELIABLE_THRESHOLD
 
 
+def display_location_state(value: str) -> str:
+    """Return a human-friendly location label for dashboard text.
+
+    HALP! exposes Home Assistant's native ``not_home`` state for automation
+    compatibility, while human-facing explanations continue to say ``away``.
+    """
+    return "away" if value == LOCATION_NOT_HOME else value
+
+
 def source_health_reason(
     results: list[Any],
     confidence: int,
@@ -122,7 +133,7 @@ def source_health_reason(
     stale_results = [
         result
         for result in results
-        if result.normalized_state in ("home", "away") and not result.usable
+        if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
     ]
 
     missing_results = [
@@ -501,7 +512,7 @@ class HalpSourceHealthSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if result.normalized_state in ("home", "away") and not result.usable
+            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
         ]
 
         conflicting_results = [
@@ -575,7 +586,7 @@ class HalpSourceDetailsSensor(HalpBaseSensor):
                 [
                     result
                     for result in results
-                    if result.normalized_state in ("home", "away")
+                    if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME)
                     and not result.usable
                 ]
             ),
@@ -822,7 +833,7 @@ class HalpHistorySummarySensor(HalpBaseSensor):
             [
                 sample
                 for sample in self._samples
-                if sample.get("vetted_location") == "away"
+                if sample.get("vetted_location") in (LOCATION_NOT_HOME, "away")
             ]
         )
 
@@ -1140,9 +1151,9 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
         label = self._source_label(result.entity_id, result.source_type_name)
 
         if result.usable:
-            status = result.normalized_state
-        elif result.normalized_state in ("home", "away"):
-            status = f"stale {result.normalized_state}"
+            status = display_location_state(result.normalized_state)
+        elif result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME):
+            status = f"stale {display_location_state(result.normalized_state)}"
         else:
             status = result.normalized_state
 
@@ -1175,7 +1186,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if result.normalized_state in ("home", "away") and not result.usable
+            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
         ]
 
         source_text = "; ".join(
@@ -1193,7 +1204,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             ]
         else:
             parts = [
-                f"{vetted_location.title()} with {confidence}% confidence.",
+                f"{display_location_state(vetted_location).title()} with {confidence}% confidence.",
                 f"{len(usable_results)} of {source_count} sources usable.",
                 f"Sources: {source_text}.",
             ]
@@ -1202,7 +1213,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             parts.append(
                 f"{len(conflicting_results)} source"
                 f"{'s' if len(conflicting_results) != 1 else ''} disagree "
-                f"with {vetted_location.title()}."
+                f"with {display_location_state(vetted_location).title()}."
             )
 
         if stale_results:
@@ -1234,7 +1245,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if not result.usable and result.normalized_state in ("home", "away")
+            if not result.usable and result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME)
         ]
 
         missing_results = [
@@ -1255,7 +1266,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
         ]
 
         lines = [
-            f"HALP! currently evaluates the location as {vetted_location} with {confidence}% confidence.",
+            f"HALP! currently evaluates the location as {display_location_state(vetted_location)} with {confidence}% confidence.",
             f"The usable source consensus score is {consensus_score}%.",
             f"Home Assistant Person state is {person_state}.",
             f"Current source states are: {'; '.join(source_statuses)}.",
@@ -1267,7 +1278,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             for result in usable_results:
                 lines.append(
                     f"{result.source_type_name} source {result.entity_id} reports "
-                    f"{result.normalized_state}, updated "
+                    f"{display_location_state(result.normalized_state)}, updated "
                     f"{format_age(result.last_updated_minutes)} ago, unchanged for "
                     f"{format_age(result.last_changed_minutes)}."
                 )
@@ -1278,8 +1289,8 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             for result in conflicting_results:
                 lines.append(
                     f"{result.source_type_name} source {result.entity_id} reports "
-                    f"{result.normalized_state}, which disagrees with "
-                    f"{vetted_location}."
+                    f"{display_location_state(result.normalized_state)}, which disagrees with "
+                    f"{display_location_state(vetted_location)}."
                 )
 
         if stale_results:
@@ -1288,7 +1299,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             for result in stale_results:
                 lines.append(
                     f"{result.source_type_name} source {result.entity_id} reports "
-                    f"{result.normalized_state}, but last updated "
+                    f"{display_location_state(result.normalized_state)}, but last updated "
                     f"{format_age(result.last_updated_minutes)} ago."
                 )
 
@@ -1469,9 +1480,9 @@ class HalpConflictDetailsSensor(HalpBaseSensor):
         label = self._source_label(result.entity_id, result.source_type_name)
 
         if result.usable:
-            status = result.normalized_state
-        elif result.normalized_state in ("home", "away"):
-            status = f"stale {result.normalized_state}"
+            status = display_location_state(result.normalized_state)
+        elif result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME):
+            status = f"stale {display_location_state(result.normalized_state)}"
         else:
             status = result.normalized_state
 
@@ -1586,7 +1597,7 @@ class HalpStaleSourcesSensor(HalpBaseSensor):
             [
                 result
                 for result in results
-                if result.normalized_state in ("home", "away") and not result.usable
+                if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
             ]
         )
 
@@ -1601,7 +1612,7 @@ class HalpStaleSourcesSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if result.normalized_state in ("home", "away") and not result.usable
+            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
         ]
 
         return {

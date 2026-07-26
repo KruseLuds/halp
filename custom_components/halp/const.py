@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 PLATFORMS = ["sensor", "binary_sensor"]
 
@@ -39,7 +39,7 @@ SOURCE_TYPE_NAMES = {
 }
 
 LOCATION_HOME = "home"
-LOCATION_AWAY = "away"
+LOCATION_NOT_HOME = "not_home"
 LOCATION_UNKNOWN = "unknown"
 LOCATION_UNAVAILABLE = "unavailable"
 LOCATION_MISSING = "missing"

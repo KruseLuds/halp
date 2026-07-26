@@ -37,7 +37,7 @@ from .const import (
     FRESHNESS_FAIR_MINUTES,
     FRESHNESS_GOOD_MINUTES,
     FRESHNESS_POOR_MINUTES,
-    LOCATION_AWAY,
+    LOCATION_NOT_HOME,
     LOCATION_HOME,
     LOCATION_MISSING,
     LOCATION_UNAVAILABLE,
@@ -58,7 +58,7 @@ class SourceResult:
 
     HALP! keeps both raw and normalized states:
     - raw_state is what Home Assistant reports.
-    - normalized_state is HALP!'s simplified home/away/unknown style value.
+    - normalized_state is HALP!'s simplified home/not_home/unknown style value.
     """
 
     source_type: str
@@ -184,8 +184,8 @@ def normalize_location_state(raw_state: str) -> str:
     if raw_state == LOCATION_HOME:
         return LOCATION_HOME
 
-    if raw_state in ("not_home", LOCATION_AWAY):
-        return LOCATION_AWAY
+    if raw_state in ("not_home", LOCATION_NOT_HOME):
+        return LOCATION_NOT_HOME
 
     if raw_state == LOCATION_UNKNOWN:
         return LOCATION_UNKNOWN
@@ -301,7 +301,7 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
                 freshness_factor=factor,
                 last_updated_minutes=updated_minutes,
                 last_changed_minutes=changed_minutes,
-                usable=normalized in (LOCATION_HOME, LOCATION_AWAY) and factor > 0,
+                usable=normalized in (LOCATION_HOME, LOCATION_NOT_HOME) and factor > 0,
             )
         )
 
@@ -325,13 +325,13 @@ def calculate_vetted_location(results: list[SourceResult]) -> str:
 
         if result.normalized_state == LOCATION_HOME:
             home_score += score
-        elif result.normalized_state == LOCATION_AWAY:
+        elif result.normalized_state == LOCATION_NOT_HOME:
             away_score += score
 
     if home_score == 0 and away_score == 0:
         return LOCATION_UNKNOWN
 
-    return LOCATION_HOME if home_score >= away_score else LOCATION_AWAY
+    return LOCATION_HOME if home_score >= away_score else LOCATION_NOT_HOME
 
 
 def calculate_confidence(results: list[SourceResult], vetted_location: str) -> int:
@@ -436,7 +436,7 @@ def calculate_source_health(
         [
             result
             for result in results
-            if result.normalized_state in (LOCATION_HOME, LOCATION_AWAY)
+            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME)
             and not result.usable
         ]
     )

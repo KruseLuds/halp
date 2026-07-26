@@ -1,6 +1,6 @@
 # HALP! DESIGN DOCUMENT
 
-Version: **1.0 (Living Document)**
+Version: **1.0.3 (Living Document)**
 
 ## Purpose
 
@@ -19,6 +19,18 @@ HALP! determines how much confidence should be placed in existing location infor
 Home Assistant remains the source of truth.
 
 HALP! never modifies Person entities, device trackers, zones, or automations.
+
+## Vetted Location State Vocabulary
+
+HALP!'s Vetted Location sensor uses Home Assistant-compatible location states:
+
+- `home`
+- `not_home`
+- `unknown`
+
+Home Assistant normally displays `not_home` as **Away** in the user interface. Code, automations, templates, stored current-state samples, and integration logic should use `not_home`; human-readable explanations may continue to use **Away**.
+
+HALP! accepts a legacy incoming `away` value and normalizes it to `not_home` for compatibility.
 
 ## Ignore Trackers
 
