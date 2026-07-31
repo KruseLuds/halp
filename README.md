@@ -759,12 +759,12 @@ binary_sensor.halp_kruse_location_reliable
 switch.halp_kruse_speed_up_not_home_transition
 ```
 
-With Area `Basement` and Device name `HALP! Kruse`, the same entities will typically begin with:
+With Area `ROAMING` and Device name `HALP! Kruse`, the same entities will typically begin with:
 
 ```text
-sensor.basement_halp_kruse_
-binary_sensor.basement_halp_kruse_
-switch.basement_halp_kruse_
+sensor.roaming_halp_kruse_
+binary_sensor.roaming_halp_kruse_
+switch.roaming_halp_kruse_
 ```
 
 For the dashboard examples below, replace:
@@ -784,9 +784,9 @@ sensor.halp_kruse_vetted_location
 ```
 
 ```text
-sensor.basement_halp_kruse_vetted_location
+sensor.roaming_halp_kruse_vetted_location
        ^^^^^^^^^^^^^^^^^^^
-       halp_entity_prefix = basement_halp_kruse
+       halp_entity_prefix = roaming_halp_kruse
 ```
 
 Do not assume that every HALP! entity ID contains only `halp_` plus the Person name. Home Assistant bases the initial entity IDs on the Device name and optional Area chosen in the **Name and assign** dialog.
@@ -834,7 +834,7 @@ halp_kruse
 or:
 
 ```text
-basement_halp_kruse
+roaming_halp_kruse
 ```
 
 (Note, the "device_tracker" GPS sensor name typically comes from the HA Companion App on the phone. For more details, please reread [Building a Reliable Home Assistant Presence System](docs/Building_a_Reliable_Presence_System.md) about device trackers.)
