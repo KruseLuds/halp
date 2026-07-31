@@ -20,6 +20,8 @@ from .const import (
     CONF_IGNORED_ENTITIES,
     CONF_PERSON_ENTITY,
     CONF_PERSON_UNIQUE_ID,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
     CONF_RELIABLE_THRESHOLD,
     CONF_ROUTER_ENTITIES,
     CONF_ROUTER_WEIGHT,
@@ -27,6 +29,7 @@ from .const import (
     DEFAULT_GPS_WEIGHT,
     DEFAULT_RELIABLE_THRESHOLD,
     DEFAULT_ROUTER_WEIGHT,
+    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
     DOMAIN,
 )
 
@@ -148,6 +151,16 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_GPS_WEIGHT] = DEFAULT_GPS_WEIGHT
                 self._data[CONF_BLE_WEIGHT] = DEFAULT_BLE_WEIGHT
                 self._data[CONF_ROUTER_WEIGHT] = DEFAULT_ROUTER_WEIGHT
+                self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME] = (
+                    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME
+                )
+                # A new installation with GPS receives the enabled default and
+                # is considered reviewed. If no GPS source is configured, keep
+                # the review flag False so the option is presented if GPS is
+                # added later.
+                self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED] = bool(
+                    gps_entities
+                )
 
                 return self.async_create_entry(
                     title=self._person_name(),
@@ -455,15 +468,40 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> config_entries.ConfigFlowResult:
-        """Edit reliability threshold and source weights."""
+        """Edit reliability threshold, source weights, and GPS departure behavior."""
         current = {
             **dict(self._config_entry.data),
             **dict(self._config_entry.options),
             **dict(self._data),
         }
 
+        has_gps = bool(self._data.get(CONF_GPS_ENTITIES, []))
+        previously_reviewed = bool(
+            current.get(
+                CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
+                False,
+            )
+        )
+
         if user_input is not None:
             new_data = dict(self._config_entry.data)
+
+            if has_gps:
+                prioritize_second_gps_not_home = user_input[
+                    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME
+                ]
+                prioritize_second_gps_not_home_reviewed = True
+            else:
+                # The setting is not applicable without a GPS source, so it is
+                # omitted from the form. Preserve its stored value and review
+                # state. An entry that has never had GPS therefore remains
+                # unreviewed and will be prompted if GPS is added later.
+                prioritize_second_gps_not_home = current.get(
+                    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                )
+                prioritize_second_gps_not_home_reviewed = previously_reviewed
+
             new_data.update(
                 {
                     CONF_PERSON_ENTITY: self._data[CONF_PERSON_ENTITY],
@@ -476,6 +514,12 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_GPS_WEIGHT: user_input[CONF_GPS_WEIGHT],
                     CONF_BLE_WEIGHT: user_input[CONF_BLE_WEIGHT],
                     CONF_ROUTER_WEIGHT: user_input[CONF_ROUTER_WEIGHT],
+                    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME: (
+                        prioritize_second_gps_not_home
+                    ),
+                    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED: (
+                        prioritize_second_gps_not_home_reviewed
+                    ),
                 }
             )
 
@@ -492,59 +536,87 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
 
             return self.async_create_entry(title="", data={})
 
+        schema_fields: dict[Any, Any] = {}
+
+        # Only show the GPS-specific option when at least one GPS source is
+        # configured for this Person.
+        if has_gps:
+            schema_fields[
+                vol.Required(
+                    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                    default=(
+                        current.get(
+                            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                        )
+                        if previously_reviewed
+                        else False
+                    ),
+                )
+            ] = selector.BooleanSelector()
+
+        schema_fields[
+            vol.Required(
+                CONF_RELIABLE_THRESHOLD,
+                default=current.get(
+                    CONF_RELIABLE_THRESHOLD,
+                    DEFAULT_RELIABLE_THRESHOLD,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=100,
+                step=1,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
+
+        schema_fields[
+            vol.Required(
+                CONF_GPS_WEIGHT,
+                default=current.get(CONF_GPS_WEIGHT, DEFAULT_GPS_WEIGHT),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=200,
+                step=5,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
+
+        schema_fields[
+            vol.Required(
+                CONF_BLE_WEIGHT,
+                default=current.get(CONF_BLE_WEIGHT, DEFAULT_BLE_WEIGHT),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=200,
+                step=5,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
+
+        schema_fields[
+            vol.Required(
+                CONF_ROUTER_WEIGHT,
+                default=current.get(CONF_ROUTER_WEIGHT, DEFAULT_ROUTER_WEIGHT),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=200,
+                step=5,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
+
         return self.async_show_form(
             step_id="tuning",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_RELIABLE_THRESHOLD,
-                        default=current.get(
-                            CONF_RELIABLE_THRESHOLD,
-                            DEFAULT_RELIABLE_THRESHOLD,
-                        ),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=100,
-                            step=1,
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_GPS_WEIGHT,
-                        default=current.get(CONF_GPS_WEIGHT, DEFAULT_GPS_WEIGHT),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=200,
-                            step=5,
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_BLE_WEIGHT,
-                        default=current.get(CONF_BLE_WEIGHT, DEFAULT_BLE_WEIGHT),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=200,
-                            step=5,
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_ROUTER_WEIGHT,
-                        default=current.get(CONF_ROUTER_WEIGHT, DEFAULT_ROUTER_WEIGHT),
-                    ): selector.NumberSelector(
-                        selector.NumberSelectorConfig(
-                            min=0,
-                            max=200,
-                            step=5,
-                            mode=selector.NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(schema_fields),
             errors={},
         )
 

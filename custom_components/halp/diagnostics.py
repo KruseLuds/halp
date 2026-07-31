@@ -14,6 +14,8 @@ from .const import (
     CONF_GPS_WEIGHT,
     CONF_IGNORED_ENTITIES,
     CONF_PERSON_ENTITY,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
     CONF_RELIABLE_THRESHOLD,
     CONF_ROUTER_ENTITIES,
     CONF_ROUTER_WEIGHT,
@@ -21,6 +23,7 @@ from .const import (
     DEFAULT_GPS_WEIGHT,
     DEFAULT_RELIABLE_THRESHOLD,
     DEFAULT_ROUTER_WEIGHT,
+    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
     DOMAIN,
 )
 
@@ -71,5 +74,13 @@ async def async_get_config_entry_diagnostics(
             "gps_weight": config.get(CONF_GPS_WEIGHT, DEFAULT_GPS_WEIGHT),
             "ble_weight": config.get(CONF_BLE_WEIGHT, DEFAULT_BLE_WEIGHT),
             "router_weight": config.get(CONF_ROUTER_WEIGHT, DEFAULT_ROUTER_WEIGHT),
+            "prioritize_second_gps_not_home": config.get(
+                CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+            ),
+            "prioritize_second_gps_not_home_reviewed": config.get(
+                CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
+                False,
+            ),
         },
     }

@@ -6,17 +6,17 @@
         "title": "Set up HALP!",
         "description": "Select the Home Assistant Person entity HALP! should analyze. HALP! will not modify the Person entity or any trackers.",
         "data": {
-          "name": "Display name",
           "person_entity": "Person entity"
         }
       },
       "classify_person_sources_v2": {
         "title": "Classify assigned location sources",
-        "description": "Below are the sensors assigned to {person_name}. Please use the drop-downs to correct the classification for each sensor below as needed (to GPS, WiFi, BLE, or Other). (Note, the below selections can be changed later in the integration configuration screen.)"
+        "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, BLE, WiFi/router, Other, or Ignore. Ignore excludes the assigned tracker from HALP! analysis and suppresses tracker mismatch warnings for that tracker.",
+        "data": {}
       }
     },
     "error": {
-      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi, or BLE."
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router."
     },
     "abort": {
       "already_configured": "This Person entity is already configured in HALP!."
@@ -26,11 +26,31 @@
     "step": {
       "init": {
         "title": "Configure HALP!",
-        "description": "Use the drop-downs to change the classification for each assigned tracker."
+        "description": "Adjust HALP!'s reliability threshold and source weights."
+      },
+      "person": {
+        "title": "Configure HALP! Person",
+        "description": "Confirm the Home Assistant Person entity HALP! should analyze. The next step lets you classify assigned trackers as GPS, BLE, WiFi/router, Other, or Ignore."
+      },
+      "classify_person_sources": {
+        "title": "Classify assigned location sources",
+        "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, BLE, WiFi/router, Other, or Ignore. Ignore excludes the assigned tracker from HALP! analysis and suppresses tracker mismatch warnings for that tracker.",
+        "data": {}
+      },
+      "tuning": {
+        "title": "Tune HALP! reliability scoring",
+        "description": "Adjust HALP!'s fast not_home transition option, reliability threshold, and source weights.",
+        "data": {
+          "reliable_threshold": "Reliability threshold % (0-100):",
+          "gps_weight": "GPS source weight (0-200):",
+          "ble_weight": "BLE source weight (0-200):",
+          "router_weight": "WiFi/router source weight (0-200):",
+          "prioritize_second_gps_not_home": "Speed up 'not_home' transition: prioritize second 'not_home' GPS update."
+        }
       }
     },
     "error": {
-      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, WiFi, or BLE."
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router."
     }
   }
 }

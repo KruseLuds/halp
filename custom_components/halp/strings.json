@@ -39,12 +39,13 @@
       },
       "tuning": {
         "title": "Tune HALP! reliability scoring",
-        "description": "Reliable threshold is a 0 to 100 confidence percentage. Source weights are voting strength values from 0 to 200.",
+        "description": "Adjust HALP!'s fast not_home transition option, reliability threshold, and source weights.",
         "data": {
           "reliable_threshold": "Reliability threshold % (0-100):",
           "gps_weight": "GPS source weight (0-200):",
           "ble_weight": "BLE source weight (0-200):",
-          "router_weight": "WiFi/router source weight (0-200):"
+          "router_weight": "WiFi/router source weight (0-200):",
+          "prioritize_second_gps_not_home": "Speed up 'not_home' transition: prioritize second 'not_home' GPS update."
         }
       }
     },
