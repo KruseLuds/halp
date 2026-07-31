@@ -45,10 +45,13 @@ from .const import (
     DOMAIN,
     LOCATION_HOME,
     LOCATION_NOT_HOME,
+    RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
+    RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
     NAME,
 )
 from .helpers import (
     analyze_sources,
+    calculate_base_confidence,
     calculate_confidence,
     calculate_consensus_score,
     calculate_source_health,
@@ -155,6 +158,17 @@ def source_health_reason(
         return (
             "Good because the location is reliable, but at least one source is "
             "stale, missing, unknown, or conflicting."
+        )
+
+    gps_fast_departure_active = any(
+        result.prioritize_second_gps_not_home_active for result in results
+    )
+
+    if health == "Fair" and gps_fast_departure_active:
+        return (
+            f"Fair because the GPS fast-departure rule is active with "
+            f"{confidence}% confidence while ordinary source consensus is "
+            f"{consensus_score}%."
         )
 
     if health == "Fair":
@@ -378,13 +392,50 @@ class HalpLocationConfidenceSensor(HalpBaseSensor):
         results = analyze_sources(self.hass, self.config)
         vetted_location = calculate_vetted_location(results)
 
-        return {
+        confidence = calculate_confidence(results, vetted_location)
+        base_confidence = calculate_base_confidence(results, vetted_location)
+        gps_fast_departure_active = bool(
+            self.config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False)
+        )
+
+        attributes = {
             "vetted_location": vetted_location,
             "ha_person_state": get_state(
                 self.hass,
                 self.config.get(CONF_PERSON_ENTITY),
             ),
+            "calculation_mode": (
+                "gps_fast_departure"
+                if gps_fast_departure_active
+                else "ordinary_weighted_evidence"
+            ),
+            "ordinary_weighted_confidence": base_confidence,
+            "reported_confidence": confidence,
         }
+
+        if gps_fast_departure_active:
+            attributes.update(
+                {
+                    "gps_fast_departure_active": True,
+                    "gps_trigger_entity": self.config.get(
+                        RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY
+                    ),
+                    "confidence_floor": 80,
+                    "confidence_reason": (
+                        "Two consecutive GPS not_home updates activated the "
+                        "fast-departure rule. Confidence is held at no less "
+                        "than 80% and may increase as other sources agree."
+                    ),
+                }
+            )
+        else:
+            attributes["gps_fast_departure_active"] = False
+            attributes["confidence_reason"] = (
+                "Calculated from ordinary weighted agreeing and conflicting "
+                "source evidence."
+            )
+
+        return attributes
 
 
 class HalpConsensusScoreSensor(HalpBaseSensor):

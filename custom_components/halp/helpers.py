@@ -28,11 +28,14 @@ from .const import (
     CONF_GPS_WEIGHT,
     CONF_PERSON_ENTITY,
     CONF_PERSON_UNIQUE_ID,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
     CONF_ROUTER_ENTITIES,
     CONF_ROUTER_WEIGHT,
     DEFAULT_BLE_WEIGHT,
     DEFAULT_GPS_WEIGHT,
     DEFAULT_ROUTER_WEIGHT,
+    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+    GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
     FRESHNESS_EXCELLENT_MINUTES,
     FRESHNESS_FAIR_MINUTES,
     FRESHNESS_GOOD_MINUTES,
@@ -46,6 +49,8 @@ from .const import (
     SOURCE_TYPE_GPS,
     SOURCE_TYPE_NAMES,
     SOURCE_TYPE_ROUTER,
+    RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
+    RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
 )
 
 
@@ -71,6 +76,8 @@ class SourceResult:
     last_updated_minutes: float
     last_changed_minutes: float
     usable: bool
+    prioritize_second_gps_not_home_active: bool = False
+    gps_priority_confidence_floor: int = 0
 
 
 def resolve_person_entity_id(
@@ -302,6 +309,25 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
                 last_updated_minutes=updated_minutes,
                 last_changed_minutes=changed_minutes,
                 usable=normalized in (LOCATION_HOME, LOCATION_NOT_HOME) and factor > 0,
+                prioritize_second_gps_not_home_active=(
+                    bool(
+                        config.get(
+                            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+                        )
+                    )
+                    and bool(
+                        config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False)
+                    )
+                ),
+                gps_priority_confidence_floor=int(
+                    config.get(
+                        RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
+                        GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
+                    )
+                )
+                if bool(config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False))
+                else 0,
             )
         )
 
@@ -314,6 +340,14 @@ def calculate_vetted_location(results: list[SourceResult]) -> str:
     This is a weighted vote between usable home evidence and usable away
     evidence. Unusable, missing, unknown, and very stale sources do not vote.
     """
+    # The optional fast-departure feature is intentionally narrow: after a
+    # configured GPS tracker changes from home to not_home and then publishes a
+    # second update while still not_home, the runtime listener marks the
+    # priority rule active. All existing voting logic remains unchanged when
+    # the rule is inactive.
+    if any(result.prioritize_second_gps_not_home_active for result in results):
+        return LOCATION_NOT_HOME
+
     home_score = 0.0
     away_score = 0.0
 
@@ -334,14 +368,15 @@ def calculate_vetted_location(results: list[SourceResult]) -> str:
     return LOCATION_HOME if home_score >= away_score else LOCATION_NOT_HOME
 
 
-def calculate_confidence(results: list[SourceResult], vetted_location: str) -> int:
-    """Calculate confidence for the current vetted location.
+def calculate_base_confidence(
+    results: list[SourceResult],
+    vetted_location: str,
+) -> int:
+    """Calculate confidence from ordinary weighted source evidence.
 
-    Philosophy:
-    - Strong agreeing evidence should increase confidence.
-    - Additional agreeing sources help, but not as much as the strongest source.
-    - Conflicting fresh evidence reduces confidence.
-    - Confidence is capped at 99 because location certainty is never perfect.
+    This function intentionally ignores the optional GPS fast-departure
+    confidence floor. It is useful for diagnostics and for maintaining the
+    temporary confidence high-water mark while that rule is active.
     """
     if vetted_location == LOCATION_UNKNOWN:
         return 0
@@ -365,6 +400,41 @@ def calculate_confidence(results: list[SourceResult], vetted_location: str) -> i
     raw = strongest + ((agree - strongest) * 0.25) - (conflict * 0.4)
 
     return int(max(0, min(99, round(raw))))
+
+
+def calculate_confidence(results: list[SourceResult], vetted_location: str) -> int:
+    """Calculate confidence for the current vetted location.
+
+    Ordinary confidence is based on weighted agreeing and conflicting evidence.
+
+    When the optional second-GPS-update fast-departure rule is actively forcing
+    ``not_home``, HALP! applies a temporary confidence floor. The floor starts
+    at 80 percent because two consecutive GPS-away updates are deliberate
+    evidence, even while slower BLE and router sources still report Home.
+
+    The runtime listener maintains a high-water mark so confidence can rise as
+    other sources agree, but cannot fall while the temporary GPS-priority state
+    remains active.
+    """
+    base_confidence = calculate_base_confidence(results, vetted_location)
+
+    active_floors = [
+        result.gps_priority_confidence_floor
+        for result in results
+        if result.prioritize_second_gps_not_home_active
+    ]
+
+    if (
+        vetted_location == LOCATION_NOT_HOME
+        and active_floors
+    ):
+        return max(
+            base_confidence,
+            GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
+            max(active_floors),
+        )
+
+    return base_confidence
 
 
 def calculate_consensus_score(
@@ -503,4 +573,7 @@ def source_result_to_attribute(result: SourceResult) -> dict[str, Any]:
         "updated": format_age(result.last_updated_minutes),
         "unchanged": format_age(result.last_changed_minutes),
         "usable": result.usable,
+        "gps_fast_departure_active": (
+            result.prioritize_second_gps_not_home_active
+        ),
     }

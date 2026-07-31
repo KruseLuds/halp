@@ -18,6 +18,55 @@ Instead, HALP! analyzes the location information Home Assistant already has and 
 
 ---
 
+# What's New in Version 1.0.4
+
+Version 1.0.4 introduces a new configurable option to improve the responsiveness of Home Assistant departure automations while preserving the reliability of GPS-based presence detection.
+
+## New Feature
+
+### Accelerate "not_home" transition: prioritize second "not_home" GPS update
+
+This option is enabled by default for new installations and can be configured independently for each HALP! Person.
+
+When all of the following occur:
+
+1. HALP!'s current Vetted Location is `home`
+2. A configured GPS tracker changes from `home` to `not_home`
+3. That same GPS tracker reports a second consecutive `not_home` update
+
+HALP! immediately changes its Vetted Location sensor to `not_home`.
+
+This allows departure automations to react sooner while still requiring two consecutive GPS updates to reduce the chance of reacting to an isolated or erroneous GPS report.
+
+While this fast-departure override is active, HALP! reports at least **80% confidence**. Confidence may rise as BLE and router/WiFi sources catch up, but it does not fall during the temporary override. Consensus remains unchanged so it continues to show the actual degree of agreement among all usable sources.
+
+The feature can be enabled or disabled at any time through either:
+
+* **Settings → Devices & Services → HALP! → Configure**
+* The HALP! switch entity created for each configured Person
+
+Example switch:
+
+```text
+switch.halp_kruse_speed_up_not_home_transition
+```
+
+## Existing Installations
+
+For users upgrading from an earlier HALP release, if there are any people with GPS sensors in the HA instance, will be prompted to review this new option the first time they open the HALP! Configure dialog for each Person.
+
+The current setting is also exposed as a switch entity, making it easy to adjust without reopening the configuration flow.
+
+This release contains no breaking configuration changes and existing HALP! installations continue to operate normally after upgrading.
+
+## Understanding the calculations
+
+For a detailed plain-English explanation of Vetted Location, source weights, freshness, Confidence, Consensus, Source Health, and the special fast-departure confidence rule, see:
+
+**[How HALP! Calculates Location, Confidence, Consensus, and Source Health](docs/How_HALP_Calculates_Location_Confidence_Consensus_and_Health.md)**
+
+---
+
 # Why HALP!?
 
 Many Home Assistant users eventually encounter situations like:
@@ -73,6 +122,8 @@ HALP! then produces:
 * Source-by-source analysis
 * Historical reliability statistics
 * Recommendations
+
+See **[How HALP! Calculates Location, Confidence, Consensus, and Source Health](docs/How_HALP_Calculates_Location_Confidence_Consensus_and_Health.md)** for the exact formulas and decision rules.
 
 ---
 
@@ -188,6 +239,59 @@ At least one tracker must be classified as GPS, BLE, or WiFi.
 
 Select **Submit** when all trackers have been classified.
 
+## Name and Assign the HALP! Device
+
+After you submit the HALP! setup form, Home Assistant may display its standard **Name and assign** dialog for the logical HALP! device.
+
+The dialog contains:
+
+* **Device name** — The display name Home Assistant will use for this HALP! device.
+* **Area** — An optional Home Assistant Area assignment - if not blank, ideally this would be "ROAMING". (If you wish the area to be ROAMING but do not have that area, just scroll to the bottom of the list and select "+ Add area")
+
+These choices also affect the initial entity IDs Home Assistant creates.
+
+Home Assistant normally builds each entity ID from:
+
+```text
+[area_]device_name_entity_name
+```
+
+The Area portion is included only when an Area is selected. Home Assistant converts spaces and punctuation to lowercase underscores.
+
+For example, leaving the Area blank and entering this Device name:
+
+```text
+HALP! Kruse
+```
+
+typically creates entity IDs such as:
+
+```text
+sensor.halp_kruse_vetted_location
+sensor.halp_kruse_location_confidence
+binary_sensor.halp_kruse_location_reliable
+switch.halp_kruse_speed_up_not_home_transition
+```
+
+Entering this Device name:
+
+```text
+Whatever The Name Is
+```
+
+and assigning the device to the **ROAMING** Area typically creates:
+
+```text
+sensor.roaming_whatever_the_name_is_vetted_location
+sensor.roaming_whatever_the_name_is_location_confidence
+binary_sensor.roaming_whatever_the_name_is_location_reliable
+switch.roaming_whatever_the_name_is_speed_up_not_home_transition
+```
+
+The Device name and Area do not change which Home Assistant Person HALP! analyzes. They affect how the HALP! device is organized and how Home Assistant initially names its entities.
+
+You may select **Skip and finish** to keep the proposed Device name and leave the Area unassigned. A Home Assistant administrator may later change the device name, Area, or individual entity IDs through Home Assistant.
+
 ## Configure Reliability Settings
 
 After setup, open:
@@ -203,27 +307,33 @@ The Configure flow lets you:
 
 The default values are intended to provide a reasonable starting point. It is usually best to collect real data before changing the weights.
 
+HALP! also provides this per-Person option, enabled by default:
+
+**Speed up 'not_home' transition: prioritize second 'not_home' GPS update.**
+
+When Vetted Location was `home`, a configured GPS tracker changes from `home` to `not_home`, and that same GPS tracker then updates again while remaining `not_home`, HALP! immediately changes Vetted Location to `not_home`. The option can also be controlled through the HALP! switch entity created for that Person.
+
 ## Confirm the Installation
 
 After setup:
 
 1. Open **Settings → Devices & services → Entities**.
-2. Search for `halp_`.
+2. If you had selected "Skip and Finish" in the last dialog above, Search for `halp_`. (Otherwise, search for the device name part of the entity you had just created above.)
 3. Confirm HALP! entities were created for the selected Person.
 4. Open the Vetted Location, Location Confidence, Consensus Score, Source Health, and Location Explanation entities.
 5. Confirm their source attributes contain the trackers you classified as GPS, BLE, or WiFi.
 
-Ignored trackers should appear in HALP! configuration and diagnostics where appropriate, but they should not be included in scoring.
+Ignored trackers should appear in HALP! configuration and diagnostics where appropriate, but they are not be included in scoring.
 
 ## Add Another Person
 
 HALP! creates one config entry for each Person.
 
-To analyze another Person:
+To add another Person to analyze:
 
 1. Go to **Settings → Devices & services**.
-2. Select **Add integration**.
-3. Add **HALP!** again.
+2. Double-click on ther **Halp!** integration.
+3. Click **Add Entry**.
 4. Select the next Person.
 5. Classify that Person's trackers.
 
@@ -250,7 +360,7 @@ Before using HALP!, each person should first be configured in Home Assistant usi
 
 Each Person should have one or more location sources assigned to it, such as GPS trackers, BLE trackers, and router/WiFi trackers. Home Assistant combines those sources to determine the Person's current location, while HALP! analyzes the quality and reliability of those decisions.
 
-HALP! works best when Home Assistant is configured with multiple independent location sources.
+HALP! works best when Home Assistant is configured with multiple independent location sources - especially including GPS, which can speed up the recognition that a person has become "not_home" faster than the original person status due to the extra logic provided.
 
 ## Tracker Classification During Setup
 
@@ -605,48 +715,81 @@ HALP! does not automatically create a dashboard because Home Assistant YAML dash
 
 The examples below are intended as starting points.
 
-## Finding Your HALP! Sensor Names
+## Finding Your HALP! Entity Names
 
-After creating a HALP! person entry:
-
-```text
-Settings -> Devices & Services -> Entities
-```
-
-Search for:
+After creating a HALP! Person entry, open:
 
 ```text
-halp_
+Settings -> Devices & services -> Entities
 ```
 
-You will see sensors similar to (assuming you have the area set to "roaming" and set the name to "john"):
+Search for the Device name you entered in the **Name and assign** dialog.
+
+For example, when the Device name is:
 
 ```text
-sensor.roaming_halp_john_vetted_location
-sensor.roaming_halp_john_location_confidence
-sensor.roaming_halp_john_consensus_score
-sensor.roaming_halp_john_source_health
+HALP! Kruse
 ```
 
-Replace placeholders such as:
+search for:
 
 ```text
-<person_name_1>
+halp_kruse
 ```
 
-with the actual HALP! entity slug.
-
-Example:
+You can also search for a specific HALP! entity name, such as:
 
 ```text
-<person_name_1> -> john
+Vetted Location
+Location Confidence
+Location Explanation
+Speed up not_home transition
 ```
 
-would produce:
+The exact entity IDs depend on the Device name and optional Area selected during setup.
+
+With no Area and Device name `HALP! Kruse`, you will typically see:
 
 ```text
-sensor.roaming_halp_john_vetted_location
+sensor.halp_kruse_vetted_location
+sensor.halp_kruse_location_confidence
+sensor.halp_kruse_consensus_score
+sensor.halp_kruse_source_health
+binary_sensor.halp_kruse_location_reliable
+switch.halp_kruse_speed_up_not_home_transition
 ```
+
+With Area `Basement` and Device name `HALP! Kruse`, the same entities will typically begin with:
+
+```text
+sensor.basement_halp_kruse_
+binary_sensor.basement_halp_kruse_
+switch.basement_halp_kruse_
+```
+
+For the dashboard examples below, replace:
+
+```text
+<halp_entity_prefix>
+```
+
+with the complete portion of the entity ID between the domain and the HALP! entity-specific suffix.
+
+Examples:
+
+```text
+sensor.halp_kruse_vetted_location
+       ^^^^^^^^^^
+       halp_entity_prefix = halp_kruse
+```
+
+```text
+sensor.basement_halp_kruse_vetted_location
+       ^^^^^^^^^^^^^^^^^^^
+       halp_entity_prefix = basement_halp_kruse
+```
+
+Do not assume that every HALP! entity ID contains only `halp_` plus the Person name. Home Assistant bases the initial entity IDs on the Device name and optional Area chosen in the **Name and assign** dialog.
 
 Note: The Vetted Location sensor is HALP!'s own location determination.
 
@@ -660,13 +803,13 @@ unknown
 
 Home Assistant normally presents `not_home` as **Away** in the user interface. Automations and templates must compare against the actual entity state `not_home`, not the display label `Away`.
 
-Meaning, if one or more Person-assigned trackers are intentionally classified as Ignore, this HALP! sensor is generally the recommended location sensor to use for automations instead of the state of the sensor typically named:
+When one or more Person-assigned trackers are intentionally classified as Ignore, the HALP! Vetted Location sensor is generally the recommended location sensor to use for automations instead of:
 
 ```text
-person.<person_name_1>
+person.<person_name>
 ```
 
-- because it reflects HALP!'s analyzed location result rather than Home Assistant's default Person location calculation.
+This is because the Vetted Location sensor reflects HALP!'s analyzed location result rather than Home Assistant's default Person location calculation.
 
 ---
 
@@ -677,10 +820,22 @@ This example uses one HALP! person entry.
 Replace:
 
 ```text
-<person_name>
+<halp_entity_prefix>
 ```
 
-with the actual HALP! entity/sensor slugs/name from your Home Assistant system.
+with the actual prefix identified in the preceding section.
+
+For example:
+
+```text
+halp_kruse
+```
+
+or:
+
+```text
+basement_halp_kruse
+```
 
 (Note, the "device_tracker" GPS sensor name typically comes from the HA Companion App on the phone. For more details, please reread [Building a Reliable Home Assistant Presence System](docs/Building_a_Reliable_Presence_System.md) about device trackers.)
 
@@ -705,13 +860,13 @@ views:
       - type: entities
         title: <person_name>
         entities:
-          - entity: sensor.halp_<person_name>_vetted_location
+          - entity: sensor.<halp_entity_prefix>_vetted_location
             name: Location
-          - entity: sensor.halp_<person_name>_location_confidence
+          - entity: sensor.<halp_entity_prefix>_location_confidence
             name: Confidence
-          - entity: sensor.halp_<person_name>_consensus_score
+          - entity: sensor.<halp_entity_prefix>_consensus_score
             name: Consensus
-          - entity: sensor.halp_<person_name>_source_health
+          - entity: sensor.<halp_entity_prefix>_source_health
             name: Health
 
       - type: map
@@ -725,27 +880,27 @@ views:
         title: Confidence
         hours_to_show: 336
         entities:
-          - entity: sensor.halp_<person_name>_confidence_trend
+          - entity: sensor.<halp_entity_prefix>_confidence_trend
             name: Person #1
 
       - type: history-graph
         title: Consensus
         hours_to_show: 336
         entities:
-          - entity: sensor.halp_<person_name>_consensus_trend
+          - entity: sensor.<halp_entity_prefix>_consensus_trend
             name: Person #1
 
       - type: entities
         title: Diagnostics
         entities:
-          - entity: sensor.halp_<person_name>_conflict_details
+          - entity: sensor.<halp_entity_prefix>_conflict_details
             name: Person #1 conflicts
             icon: mdi:alert-circle-outline
-          - entity: sensor.halp_<person_name>_stale_sources
+          - entity: sensor.<halp_entity_prefix>_stale_sources
             name: Person #1 stale
-          - entity: sensor.halp_<person_name>_last_reliable_change
+          - entity: sensor.<halp_entity_prefix>_last_reliable_change
             name: Person #1 last reliable
-          - entity: sensor.halp_<person_name>_location_explanation
+          - entity: sensor.<halp_entity_prefix>_location_explanation
             name: Explanation
             icon: mdi:text-box-search
 ```
@@ -759,11 +914,11 @@ This example uses two HALP! person entries.
 Replace:
 
 ```text
-<person_name_1>
-<person_name_2>
+<halp_entity_prefix_1>
+<halp_entity_prefix_2>
 ```
 
-with the actual HALP! entity/sensor slugs/names from your Home Assistant system.
+with the actual HALP! entity prefixes for the two configured HALP! devices.
 
 And then replace:
 
@@ -795,13 +950,13 @@ views:
               - type: entities
                 title: 👩🏻 <person_name_1>
                 entities:
-                  - entity: sensor.roaming_<person_name_1>_vetted_location
+                  - entity: sensor.<halp_entity_prefix_1>_vetted_location
                     name: Location
-                  - entity: sensor.roaming_<person_name_1>_location_confidence
+                  - entity: sensor.<halp_entity_prefix_1>_location_confidence
                     name: Confidence
-                  - entity: sensor.roaming_<person_name_1>_consensus_score
+                  - entity: sensor.<halp_entity_prefix_1>_consensus_score
                     name: Consensus
-                  - entity: sensor.roaming_<person_name_1>_source_health
+                  - entity: sensor.<halp_entity_prefix_1>_source_health
                     name: Health
 
           - type: vertical-stack
@@ -809,13 +964,13 @@ views:
               - type: entities
                 title: 👱‍♂️ <person_name_2>
                 entities:
-                  - entity: sensor.roaming_<person_name_2>_vetted_location
+                  - entity: sensor.<halp_entity_prefix_2>_vetted_location
                     name: Location
-                  - entity: sensor.roaming_<person_name_2>_location_confidence
+                  - entity: sensor.<halp_entity_prefix_2>_location_confidence
                     name: Confidence
-                  - entity: sensor.roaming_<person_name_2>_consensus_score
+                  - entity: sensor.<halp_entity_prefix_2>_consensus_score
                     name: Consensus
-                  - entity: sensor.roaming_<person_name_2>_source_health
+                  - entity: sensor.<halp_entity_prefix_2>_source_health
                     name: Health
 
       - type: horizontal-stack
@@ -841,18 +996,18 @@ views:
             title: Confidence
             hours_to_show: 336
             entities:
-              - entity: sensor.roaming_<person_name_1>_confidence_trend
+              - entity: sensor.<halp_entity_prefix_1>_confidence_trend
                 name: Cathy
-              - entity: sensor.roaming_<person_name_2>_confidence_trend
+              - entity: sensor.<halp_entity_prefix_2>_confidence_trend
                 name: Kruse
 
           - type: history-graph
             title: Consensus
             hours_to_show: 336
             entities:
-              - entity: sensor.roaming_<person_name_1>_consensus_trend
+              - entity: sensor.<halp_entity_prefix_1>_consensus_trend
                 name: Cathy
-              - entity: sensor.roaming_<person_name_2>_consensus_trend
+              - entity: sensor.<halp_entity_prefix_2>_consensus_trend
                 name: Kruse
 
       - type: vertical-stack
@@ -864,24 +1019,24 @@ views:
             cards:
                - type: entities 
                  entities:
-                  - entity: sensor.roaming_<person_name_1>_conflict_details
+                  - entity: sensor.<halp_entity_prefix_1>_conflict_details
                     name: <person_name_1> conflicts
                     icon: mdi:alert-circle-outline
-                  - entity: sensor.roaming_<person_name_1>_stale_sources
+                  - entity: sensor.<halp_entity_prefix_1>_stale_sources
                     name: <person_name_1> stale
-                  - entity: sensor.roaming_<person_name_1>_last_reliable_change
+                  - entity: sensor.<halp_entity_prefix_1>_last_reliable_change
                     name: <person_name_1> last reliable
-                  - entity: sensor.roaming_<person_name_1>_location_explanation
+                  - entity: sensor.<halp_entity_prefix_1>_location_explanation
                     name: Explanation
                     icon: mdi:text-box-search                    
-                  - entity: sensor.roaming_<person_name_2>_conflict_details
+                  - entity: sensor.<halp_entity_prefix_2>_conflict_details
                     name: <person_name_2> conflicts
                     icon: mdi:alert-circle-outline
-                  - entity: sensor.roaming_<person_name_2>_stale_sources
+                  - entity: sensor.<halp_entity_prefix_2>_stale_sources
                     name: <person_name_2> stale
-                  - entity: sensor.roaming_<person_name_2>_last_reliable_change
+                  - entity: sensor.<halp_entity_prefix_2>_last_reliable_change
                     name: <person_name_1> last reliable
-                  - entity: sensor.roaming_<person_name_2>_location_explanation
+                  - entity: sensor.<halp_entity_prefix_2>_location_explanation
                     name: Explanation
                     icon: mdi:text-box-search
 ```

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "switch"]
 
 CONF_PERSON_ENTITY = "person_entity"
 CONF_PERSON_UNIQUE_ID = "person_unique_id"
@@ -27,6 +27,11 @@ CONF_RELIABLE_THRESHOLD = "reliable_threshold"
 CONF_GPS_WEIGHT = "gps_weight"
 CONF_BLE_WEIGHT = "ble_weight"
 CONF_ROUTER_WEIGHT = "router_weight"
+
+CONF_PRIORITIZE_SECOND_GPS_NOT_HOME = "prioritize_second_gps_not_home"
+CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED = (
+    "prioritize_second_gps_not_home_reviewed"
+)
 
 SOURCE_TYPE_GPS = "gps"
 SOURCE_TYPE_BLE = "ble"
@@ -49,6 +54,17 @@ DEFAULT_RELIABLE_THRESHOLD = 70
 DEFAULT_GPS_WEIGHT = 100
 DEFAULT_BLE_WEIGHT = 70
 DEFAULT_ROUTER_WEIGHT = 55
+
+DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME = True
+GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR = 80
+
+# Runtime-only keys. These are kept in hass.data and are never persisted.
+RUNTIME_GPS_NOT_HOME_ARMED = "_gps_not_home_armed"
+RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE = "_gps_not_home_priority_active"
+RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY = "_gps_not_home_trigger_entity"
+RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER = (
+    "_gps_not_home_confidence_high_water"
+)
 
 FRESHNESS_EXCELLENT_MINUTES = 15
 FRESHNESS_GOOD_MINUTES = 60

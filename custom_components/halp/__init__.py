@@ -7,9 +7,12 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 
 from .const import (
@@ -17,16 +20,28 @@ from .const import (
     CONF_GPS_ENTITIES,
     CONF_IGNORED_ENTITIES,
     CONF_PERSON_ENTITY,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+    CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
     CONF_ROUTER_ENTITIES,
+    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+    GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
     DOMAIN,
     PLATFORMS,
+    LOCATION_HOME,
+    LOCATION_NOT_HOME,
+    RUNTIME_GPS_NOT_HOME_ARMED,
+    RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
+    RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
+    RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
 )
 from .helpers import (
     analyze_sources,
+    calculate_base_confidence,
     calculate_confidence,
     calculate_consensus_score,
     calculate_source_health,
     calculate_vetted_location,
+    normalize_location_state,
     resolve_person_entity_id,
 )
 from .history import async_record_history_sample
@@ -58,6 +73,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         **dict(entry.options),
     }
 
+    # Existing entries created before this option existed must review it.
+    # Until Configure is saved, the new departure rule remains disabled.
+    review_complete = bool(
+        config.get(CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED, False)
+    )
+    if not review_complete:
+        config[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME] = False
+
+    # Runtime-only state for the optional second-GPS-update departure rule.
+    # These values are deliberately not persisted across reloads or restarts.
+    config[RUNTIME_GPS_NOT_HOME_ARMED] = set()
+    config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
+    config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+    config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+
     resolved_person_entity = resolve_person_entity_id(hass, entry)
 
     if resolved_person_entity is not None:
@@ -86,6 +116,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = config
 
+    await _async_update_fast_departure_review_notification(hass, entry, config)
+
     if not config.get("person_missing", False):
         await _async_check_tracker_mismatch(hass, entry, config)
 
@@ -110,6 +142,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         await _async_check_tracker_mismatch(hass, entry, current_config)
+        await _async_update_fast_departure_review_notification(
+            hass, entry, current_config
+        )
 
     entry.async_on_unload(
         async_track_time_interval(
@@ -161,7 +196,152 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Listen to every scored tracker so the GPS-specific rule can observe an
+    # update whose state remains not_home, while normal arrival evidence can
+    # clear a temporary priority override.
+    tracked_entities = _configured_location_trackers(config)
+    if tracked_entities:
+        async def _async_location_source_event(event: Event) -> None:
+            """Forward tracker state-change events to the async HALP handler."""
+            await _async_handle_location_source_event(
+                hass,
+                entry,
+                event,
+            )
+
+        entry.async_on_unload(
+            async_track_state_change_event(
+                hass,
+                tracked_entities,
+                _async_location_source_event,
+            )
+        )
+
     return True
+
+
+async def _async_handle_location_source_event(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    event: Event,
+) -> None:
+    """Apply the optional second not_home GPS update rule.
+
+    The rule is armed only when the vetted result immediately before the GPS
+    home -> not_home transition was home. A later update from that same GPS
+    entity, with both old and new states still not_home, activates the temporary
+    priority override.
+
+    While the override is active, confidence starts at no less than 80 percent
+    and uses a runtime high-water mark so it may rise as other sources catch up
+    but cannot fall. The override is cleared when normal voting independently
+    reaches not_home or when a configured source produces a new positive Home
+    transition.
+    """
+    config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if not isinstance(config, dict):
+        return
+
+    if not bool(
+        config.get(
+            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+        )
+    ):
+        config[RUNTIME_GPS_NOT_HOME_ARMED] = set()
+        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
+        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+        return
+
+    entity_id = event.data.get("entity_id")
+    old_state = event.data.get("old_state")
+    new_state = event.data.get("new_state")
+
+    if not isinstance(entity_id, str) or old_state is None or new_state is None:
+        return
+
+    old_normalized = normalize_location_state(old_state.state)
+    new_normalized = normalize_location_state(new_state.state)
+    gps_entities = set(config.get(CONF_GPS_ENTITIES, []))
+    armed = config.get(RUNTIME_GPS_NOT_HOME_ARMED)
+    if not isinstance(armed, set):
+        armed = set()
+        config[RUNTIME_GPS_NOT_HOME_ARMED] = armed
+
+    # A fresh positive Home transition must remain able to restore Home using
+    # the existing HALP! rules, even if an earlier GPS sequence forced Away.
+    if new_normalized == LOCATION_HOME and old_normalized != LOCATION_HOME:
+        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
+        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+        armed.clear()
+        return
+
+    if entity_id in gps_entities:
+        if old_normalized == LOCATION_HOME and new_normalized == LOCATION_NOT_HOME:
+            # Reconstruct the pre-event vote by analyzing current sources and
+            # substituting this GPS entity's previous Home state.
+            results = analyze_sources(hass, config)
+            for result in results:
+                if result.entity_id == entity_id:
+                    result.raw_state = old_state.state
+                    result.normalized_state = old_normalized
+                    result.usable = True
+                result.prioritize_second_gps_not_home_active = False
+                result.gps_priority_confidence_floor = 0
+
+            if calculate_vetted_location(results) == LOCATION_HOME:
+                armed.add(entity_id)
+            else:
+                armed.discard(entity_id)
+
+        elif (
+            entity_id in armed
+            and old_normalized == LOCATION_NOT_HOME
+            and new_normalized == LOCATION_NOT_HOME
+        ):
+            config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = True
+            config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = entity_id
+            config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = (
+                GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR
+            )
+            armed.discard(entity_id)
+
+        elif new_normalized != LOCATION_NOT_HOME:
+            armed.discard(entity_id)
+
+    if config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False):
+        # Preserve a non-decreasing confidence value while the temporary
+        # fast-departure override remains active.
+        current_results = analyze_sources(hass, config)
+        base_confidence = calculate_base_confidence(
+            current_results,
+            LOCATION_NOT_HOME,
+        )
+        current_high_water = int(
+            config.get(
+                RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
+                GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
+            )
+        )
+        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = max(
+            GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
+            current_high_water,
+            base_confidence,
+        )
+
+        # Once ordinary weighted voting independently says not_home, the
+        # temporary override and its high-water mark are no longer needed.
+        ordinary_results = analyze_sources(hass, config)
+        for result in ordinary_results:
+            result.prioritize_second_gps_not_home_active = False
+            result.gps_priority_confidence_floor = 0
+
+        if calculate_vetted_location(ordinary_results) == LOCATION_NOT_HOME:
+            config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
+            config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+            config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
 
 
 async def _async_check_tracker_mismatch(
@@ -331,6 +511,52 @@ async def _async_dismiss_tracker_mismatch_notification(
 def _tracker_mismatch_notification_id(entry: ConfigEntry) -> str:
     """Return the stable persistent notification ID for one entry."""
     return f"{DOMAIN}_tracker_mismatch_{entry.entry_id}"
+
+
+async def _async_update_fast_departure_review_notification(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    config: dict[str, Any],
+) -> None:
+    """Require upgraded entries to review the new GPS departure option."""
+    reviewed = bool(
+        config.get(CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED, False)
+    )
+    notification_id = _fast_departure_review_notification_id(entry)
+
+    if reviewed:
+        await hass.services.async_call(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": notification_id},
+            blocking=False,
+        )
+        return
+
+    await hass.services.async_call(
+        "persistent_notification",
+        "create",
+        {
+            "title": f"HALP! configuration review required for {entry.title}",
+            "message": (
+                "HALP! added the option **Speed up 'not_home' transition: "
+                "prioritize second 'not_home' GPS update.**\n\n"
+                "For existing HALP! entries, this option remains disabled until "
+                "you review it. Open **Settings → Devices & services → HALP!**, "
+                "choose **Configure** for this person, select the setting you "
+                "want, and save the configuration.\n\n"
+                "This notification will be recreated until the Configure flow "
+                "has been saved."
+            ),
+            "notification_id": notification_id,
+        },
+        blocking=False,
+    )
+
+
+def _fast_departure_review_notification_id(entry: ConfigEntry) -> str:
+    """Return the stable review-notification ID for one entry."""
+    return f"{DOMAIN}_fast_departure_review_{entry.entry_id}"
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
