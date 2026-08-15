@@ -23,6 +23,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_BLE_ENTITIES,
+    CONF_BLE_ZONES,
     CONF_BLE_WEIGHT,
     CONF_GPS_ENTITIES,
     CONF_GPS_WEIGHT,
@@ -30,6 +31,7 @@ from .const import (
     CONF_PERSON_UNIQUE_ID,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
     CONF_ROUTER_ENTITIES,
+    CONF_ROUTER_ZONES,
     CONF_ROUTER_WEIGHT,
     DEFAULT_BLE_WEIGHT,
     DEFAULT_GPS_WEIGHT,
@@ -50,7 +52,9 @@ from .const import (
     SOURCE_TYPE_NAMES,
     SOURCE_TYPE_ROUTER,
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
+    RUNTIME_GPS_PRIORITY_LOCATION,
     RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
+    ROUTER_ZONE_NONE_MOBILE,
 )
 
 
@@ -63,7 +67,7 @@ class SourceResult:
 
     HALP! keeps both raw and normalized states:
     - raw_state is what Home Assistant reports.
-    - normalized_state is HALP!'s simplified home/not_home/unknown style value.
+    - normalized_state is HALP!'s Home Assistant-compatible location value.
     """
 
     source_type: str
@@ -78,6 +82,8 @@ class SourceResult:
     usable: bool
     prioritize_second_gps_not_home_active: bool = False
     gps_priority_confidence_floor: int = 0
+    gps_priority_location: str | None = None
+    fixed_zone_entity_id: str | None = None
 
 
 def resolve_person_entity_id(
@@ -178,33 +184,69 @@ def format_age(minutes: float) -> str:
 def normalize_location_state(raw_state: str) -> str:
     """Normalize common Home Assistant location states.
 
-    Home Assistant trackers may report:
-    - home
-    - not_home
-    - unavailable
-    - unknown
-    - named zones
-
-    For the first version, HALP! treats home and away as the main reliable
-    states. Named zones are preserved so they can be improved later.
+    Home Assistant GPS-capable trackers may report ``home``, ``not_home``, or
+    the name of any configured zone. Named zones are deliberately preserved.
+    Legacy ``away`` is normalized to Home Assistant's native ``not_home``.
     """
     if raw_state == LOCATION_HOME:
         return LOCATION_HOME
-
-    if raw_state in ("not_home", LOCATION_NOT_HOME):
+    if raw_state in ("away", LOCATION_NOT_HOME):
         return LOCATION_NOT_HOME
-
     if raw_state == LOCATION_UNKNOWN:
         return LOCATION_UNKNOWN
-
     if raw_state == LOCATION_UNAVAILABLE:
         return LOCATION_UNAVAILABLE
-
     if raw_state == LOCATION_MISSING:
         return LOCATION_MISSING
-
     return raw_state
 
+
+def is_valid_location_state(value: str) -> bool:
+    """Return whether a normalized value can represent a real location."""
+    return value not in (LOCATION_UNKNOWN, LOCATION_UNAVAILABLE, LOCATION_MISSING, "")
+
+
+def zone_location_state(hass: HomeAssistant, zone_entity_id: str | None) -> str | None:
+    """Return the Home Assistant location state represented by a zone entity.
+
+    The Home zone uses the special state ``home``. Other zones use their
+    friendly name, matching the state vocabulary produced by GPS trackers.
+    Passive zones are not accepted as fixed HALP! voting locations.
+    """
+    if not zone_entity_id or zone_entity_id == ROUTER_ZONE_NONE_MOBILE:
+        return None
+    state = hass.states.get(zone_entity_id)
+    if state is None or not zone_entity_id.startswith("zone."):
+        return None
+    if bool(state.attributes.get("passive", False)):
+        return None
+    if zone_entity_id == "zone.home":
+        return LOCATION_HOME
+    friendly_name = state.attributes.get("friendly_name")
+    if isinstance(friendly_name, str) and friendly_name:
+        return friendly_name
+    return zone_entity_id.split(".", 1)[1]
+
+
+def canonical_dynamic_location_state(hass: HomeAssistant, raw_state: str) -> str:
+    """Canonicalize a dynamic tracker state against current active HA zones."""
+    normalized = normalize_location_state(raw_state)
+    if not is_valid_location_state(normalized) or normalized in (LOCATION_HOME, LOCATION_NOT_HOME):
+        return normalized
+
+    folded = normalized.casefold()
+    for state in hass.states.async_all("zone"):
+        if bool(state.attributes.get("passive", False)):
+            continue
+        entity_id = state.entity_id
+        friendly_name = state.attributes.get("friendly_name")
+        object_id = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+        candidates = [object_id]
+        if isinstance(friendly_name, str):
+            candidates.append(friendly_name)
+        if any(folded == candidate.casefold() for candidate in candidates):
+            return zone_location_state(hass, entity_id) or normalized
+    return normalized
 
 def freshness_factor(age_minutes: float) -> float:
     """Convert source age into a confidence multiplier.
@@ -275,27 +317,72 @@ def iter_configured_sources(config: dict[str, Any]) -> list[tuple[str, str]]:
 
 
 def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceResult]:
-    """Analyze all configured location sources.
+    """Analyze all configured location sources for multi-zone voting.
 
-    This is the main entry point for current-state analysis.
+    GPS is dynamic and may vote for any active Home Assistant zone or
+    ``not_home``. BLE is fixed to exactly one configured zone per tracker.
+    Router/WiFi is fixed to one zone unless explicitly configured as
+    None/Mobile, in which case its Home Assistant state is treated dynamically.
 
-    It does not decide the final location by itself. Instead, it builds a list
-    of SourceResult objects that other functions can use to calculate:
-    - vetted location
-    - confidence
-    - consensus
-    - source health
-    - explanations
+    A fixed source's positive detection is strong location evidence. Its
+    ``not_home`` state only means that the device is not detected by that fixed
+    source, so it does not vote for the global ``not_home`` location.
     """
     results: list[SourceResult] = []
+    ble_zones = config.get(CONF_BLE_ZONES, {})
+    if not isinstance(ble_zones, dict):
+        ble_zones = {}
+    router_zones = config.get(CONF_ROUTER_ZONES, {})
+    if not isinstance(router_zones, dict):
+        router_zones = {}
+
+    priority_active = bool(config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False))
+    priority_location = config.get(RUNTIME_GPS_PRIORITY_LOCATION)
+    if not isinstance(priority_location, str) or not is_valid_location_state(priority_location):
+        priority_location = None
 
     for source_type, entity_id in iter_configured_sources(config):
         raw_state = get_state(hass, entity_id)
-        normalized = normalize_location_state(raw_state)
+        raw_normalized = canonical_dynamic_location_state(hass, raw_state)
         updated_minutes = minutes_since_updated(hass, entity_id)
         changed_minutes = minutes_since_changed(hass, entity_id)
         factor = freshness_factor(updated_minutes)
         weight = source_weight(config, source_type)
+        fixed_zone_entity_id: str | None = None
+        usable = False
+        normalized = raw_normalized
+
+        if source_type == SOURCE_TYPE_GPS:
+            usable = is_valid_location_state(normalized) and factor > 0
+
+        elif source_type == SOURCE_TYPE_BLE:
+            configured_zone = ble_zones.get(entity_id, "zone.home")
+            fixed_zone_entity_id = configured_zone if isinstance(configured_zone, str) else "zone.home"
+            fixed_location = zone_location_state(hass, fixed_zone_entity_id)
+            if raw_normalized not in (LOCATION_NOT_HOME, LOCATION_UNKNOWN, LOCATION_UNAVAILABLE, LOCATION_MISSING):
+                if fixed_location is not None:
+                    normalized = fixed_location
+                    usable = factor > 0
+            else:
+                normalized = raw_normalized
+
+        elif source_type == SOURCE_TYPE_ROUTER:
+            configured_zone = router_zones.get(entity_id, "zone.home")
+            fixed_zone_entity_id = configured_zone if isinstance(configured_zone, str) else "zone.home"
+            if fixed_zone_entity_id == ROUTER_ZONE_NONE_MOBILE:
+                # A mobile/unassigned router can confirm connectivity but not an
+                # absolute geographic zone, so it remains visible in diagnostics
+                # without voting for location.
+                fixed_zone_entity_id = None
+                usable = False
+            else:
+                fixed_location = zone_location_state(hass, fixed_zone_entity_id)
+                if raw_normalized not in (LOCATION_NOT_HOME, LOCATION_UNKNOWN, LOCATION_UNAVAILABLE, LOCATION_MISSING):
+                    if fixed_location is not None:
+                        normalized = fixed_location
+                        usable = factor > 0
+                else:
+                    normalized = raw_normalized
 
         results.append(
             SourceResult(
@@ -308,26 +395,17 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
                 freshness_factor=factor,
                 last_updated_minutes=updated_minutes,
                 last_changed_minutes=changed_minutes,
-                usable=normalized in (LOCATION_HOME, LOCATION_NOT_HOME) and factor > 0,
+                usable=usable,
                 prioritize_second_gps_not_home_active=(
-                    bool(
-                        config.get(
-                            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
-                            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
-                        )
-                    )
-                    and bool(
-                        config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False)
-                    )
+                    bool(config.get(CONF_PRIORITIZE_SECOND_GPS_NOT_HOME, DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME))
+                    and priority_active
                 ),
-                gps_priority_confidence_floor=int(
-                    config.get(
-                        RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
-                        GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
-                    )
-                )
-                if bool(config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False))
-                else 0,
+                gps_priority_confidence_floor=(
+                    int(config.get(RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER, GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR))
+                    if priority_active else 0
+                ),
+                gps_priority_location=priority_location if priority_active else None,
+                fixed_zone_entity_id=fixed_zone_entity_id,
             )
         )
 
@@ -335,38 +413,32 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
 
 
 def calculate_vetted_location(results: list[SourceResult]) -> str:
-    """Calculate HALP!'s best current location conclusion.
-
-    This is a weighted vote between usable home evidence and usable away
-    evidence. Unusable, missing, unknown, and very stale sources do not vote.
-    """
-    # The optional fast-departure feature is intentionally narrow: after a
-    # configured GPS tracker changes from home to not_home and then publishes a
-    # second update while still not_home, the runtime listener marks the
-    # priority rule active. All existing voting logic remains unchanged when
-    # the rule is inactive.
-    if any(result.prioritize_second_gps_not_home_active for result in results):
-        return LOCATION_NOT_HOME
-
-    home_score = 0.0
-    away_score = 0.0
-
+    """Calculate HALP!'s best current location across any number of zones."""
     for result in results:
-        if not result.usable:
+        if result.prioritize_second_gps_not_home_active and result.gps_priority_location:
+            return result.gps_priority_location
+
+    scores: dict[str, float] = {}
+    for result in results:
+        if not result.usable or not is_valid_location_state(result.normalized_state):
             continue
+        scores[result.normalized_state] = scores.get(result.normalized_state, 0.0) + (
+            result.weight * result.freshness_factor
+        )
 
-        score = result.weight * result.freshness_factor
-
-        if result.normalized_state == LOCATION_HOME:
-            home_score += score
-        elif result.normalized_state == LOCATION_NOT_HOME:
-            away_score += score
-
-    if home_score == 0 and away_score == 0:
+    if not scores:
         return LOCATION_UNKNOWN
 
-    return LOCATION_HOME if home_score >= away_score else LOCATION_NOT_HOME
+    highest = max(scores.values())
+    leaders = [location for location, score in scores.items() if score == highest]
+    if len(leaders) == 1:
+        return leaders[0]
 
+    # Preserve the original safety bias toward Home when Home is tied. For a
+    # tie between two non-Home locations, do not invent an arbitrary winner.
+    if LOCATION_HOME in leaders:
+        return LOCATION_HOME
+    return LOCATION_UNKNOWN
 
 def calculate_base_confidence(
     results: list[SourceResult],
@@ -374,7 +446,7 @@ def calculate_base_confidence(
 ) -> int:
     """Calculate confidence from ordinary weighted source evidence.
 
-    This function intentionally ignores the optional GPS fast-departure
+    This function intentionally ignores the optional GPS fast-transition
     confidence floor. It is useful for diagnostics and for maintaining the
     temporary confidence high-water mark while that rule is active.
     """
@@ -407,10 +479,10 @@ def calculate_confidence(results: list[SourceResult], vetted_location: str) -> i
 
     Ordinary confidence is based on weighted agreeing and conflicting evidence.
 
-    When the optional second-GPS-update fast-departure rule is actively forcing
-    ``not_home``, HALP! applies a temporary confidence floor. The floor starts
-    at 80 percent because two consecutive GPS-away updates are deliberate
-    evidence, even while slower BLE and router sources still report Home.
+    When the optional second-matching-GPS-update rule is actively prioritizing
+    a newly confirmed location, HALP! applies a temporary confidence floor. The
+    floor starts at 80 percent because two consecutive matching GPS location
+    updates are deliberate evidence even while slower fixed sources lag.
 
     The runtime listener maintains a high-water mark so confidence can rise as
     other sources agree, but cannot fall while the temporary GPS-priority state
@@ -424,10 +496,7 @@ def calculate_confidence(results: list[SourceResult], vetted_location: str) -> i
         if result.prioritize_second_gps_not_home_active
     ]
 
-    if (
-        vetted_location == LOCATION_NOT_HOME
-        and active_floors
-    ):
+    if active_floors and vetted_location != LOCATION_UNKNOWN:
         return max(
             base_confidence,
             GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
@@ -506,8 +575,8 @@ def calculate_source_health(
         [
             result
             for result in results
-            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME)
-            and not result.usable
+            if is_valid_location_state(result.normalized_state)
+            and result.freshness_factor <= 0
         ]
     )
 
@@ -573,7 +642,12 @@ def source_result_to_attribute(result: SourceResult) -> dict[str, Any]:
         "updated": format_age(result.last_updated_minutes),
         "unchanged": format_age(result.last_changed_minutes),
         "usable": result.usable,
+        "gps_fast_transition_active": (
+            result.prioritize_second_gps_not_home_active
+        ),
         "gps_fast_departure_active": (
             result.prioritize_second_gps_not_home_active
         ),
+        "gps_priority_location": result.gps_priority_location,
+        "fixed_zone_entity_id": result.fixed_zone_entity_id,
     }

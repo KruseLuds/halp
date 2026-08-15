@@ -47,6 +47,7 @@ from .const import (
     LOCATION_NOT_HOME,
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
     RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
+    RUNTIME_GPS_PRIORITY_LOCATION,
     NAME,
 )
 from .helpers import (
@@ -58,6 +59,7 @@ from .helpers import (
     calculate_vetted_location,
     format_age,
     get_state,
+    is_valid_location_state,
     source_result_to_attribute,
 )
 
@@ -136,7 +138,7 @@ def source_health_reason(
     stale_results = [
         result
         for result in results
-        if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
+        if is_valid_location_state(result.normalized_state) and result.freshness_factor <= 0
     ]
 
     missing_results = [
@@ -160,13 +162,13 @@ def source_health_reason(
             "stale, missing, unknown, or conflicting."
         )
 
-    gps_fast_departure_active = any(
+    gps_fast_transition_active = any(
         result.prioritize_second_gps_not_home_active for result in results
     )
 
-    if health == "Fair" and gps_fast_departure_active:
+    if health == "Fair" and gps_fast_transition_active:
         return (
-            f"Fair because the GPS fast-departure rule is active with "
+            f"Fair because the GPS fast-transition rule is active with "
             f"{confidence}% confidence while ordinary source consensus is "
             f"{consensus_score}%."
         )
@@ -394,7 +396,7 @@ class HalpLocationConfidenceSensor(HalpBaseSensor):
 
         confidence = calculate_confidence(results, vetted_location)
         base_confidence = calculate_base_confidence(results, vetted_location)
-        gps_fast_departure_active = bool(
+        gps_fast_transition_active = bool(
             self.config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False)
         )
 
@@ -405,30 +407,35 @@ class HalpLocationConfidenceSensor(HalpBaseSensor):
                 self.config.get(CONF_PERSON_ENTITY),
             ),
             "calculation_mode": (
-                "gps_fast_departure"
-                if gps_fast_departure_active
+                "gps_fast_transition"
+                if gps_fast_transition_active
                 else "ordinary_weighted_evidence"
             ),
             "ordinary_weighted_confidence": base_confidence,
             "reported_confidence": confidence,
         }
 
-        if gps_fast_departure_active:
+        if gps_fast_transition_active:
             attributes.update(
                 {
+                    "gps_fast_transition_active": True,
                     "gps_fast_departure_active": True,
                     "gps_trigger_entity": self.config.get(
                         RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY
                     ),
+                    "gps_priority_location": self.config.get(
+                        RUNTIME_GPS_PRIORITY_LOCATION
+                    ),
                     "confidence_floor": 80,
                     "confidence_reason": (
-                        "Two consecutive GPS not_home updates activated the "
-                        "fast-departure rule. Confidence is held at no less "
+                        "Two matching GPS location updates activated the "
+                        "fast-transition rule. Confidence is held at no less "
                         "than 80% and may increase as other sources agree."
                     ),
                 }
             )
         else:
+            attributes["gps_fast_transition_active"] = False
             attributes["gps_fast_departure_active"] = False
             attributes["confidence_reason"] = (
                 "Calculated from ordinary weighted agreeing and conflicting "
@@ -563,7 +570,7 @@ class HalpSourceHealthSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
+            if is_valid_location_state(result.normalized_state) and result.freshness_factor <= 0
         ]
 
         conflicting_results = [
@@ -637,8 +644,8 @@ class HalpSourceDetailsSensor(HalpBaseSensor):
                 [
                     result
                     for result in results
-                    if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME)
-                    and not result.usable
+                    if is_valid_location_state(result.normalized_state)
+                    and result.freshness_factor <= 0
                 ]
             ),
             "missing_or_unknown_sources": len(
@@ -1203,7 +1210,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
 
         if result.usable:
             status = display_location_state(result.normalized_state)
-        elif result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME):
+        elif is_valid_location_state(result.normalized_state):
             status = f"stale {display_location_state(result.normalized_state)}"
         else:
             status = result.normalized_state
@@ -1237,7 +1244,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
+            if is_valid_location_state(result.normalized_state) and result.freshness_factor <= 0
         ]
 
         source_text = "; ".join(
@@ -1296,7 +1303,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if not result.usable and result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME)
+            if result.freshness_factor <= 0 and is_valid_location_state(result.normalized_state)
         ]
 
         missing_results = [
@@ -1532,7 +1539,7 @@ class HalpConflictDetailsSensor(HalpBaseSensor):
 
         if result.usable:
             status = display_location_state(result.normalized_state)
-        elif result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME):
+        elif is_valid_location_state(result.normalized_state):
             status = f"stale {display_location_state(result.normalized_state)}"
         else:
             status = result.normalized_state
@@ -1648,7 +1655,7 @@ class HalpStaleSourcesSensor(HalpBaseSensor):
             [
                 result
                 for result in results
-                if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
+                if is_valid_location_state(result.normalized_state) and result.freshness_factor <= 0
             ]
         )
 
@@ -1663,7 +1670,7 @@ class HalpStaleSourcesSensor(HalpBaseSensor):
         stale_results = [
             result
             for result in results
-            if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
+            if is_valid_location_state(result.normalized_state) and result.freshness_factor <= 0
         ]
 
         return {
@@ -1676,13 +1683,23 @@ class HalpStaleSourcesSensor(HalpBaseSensor):
 
 
 class HalpLastReliableChangeSensor(HalpBaseSensor, RestoreEntity):
-    """Sensor showing when reliability last changed.
+    """Sensor showing when HALP! last established a reliable location change.
 
-    RestoreEntity is used so this sensor survives HA restarts.
+    RestoreEntity is used so this sensor survives Home Assistant restarts.
 
-    It stores the timestamp when the reliable state last changed between:
-    - reliable
-    - not reliable
+    The timestamp changes only when HALP! has confidence at or above the
+    configured reliability threshold and the reliable vetted location changes
+    from the previously established reliable location.
+
+    Confidence changes by themselves do not move this timestamp. An unreliable
+    interval also does not move it. If the location changes while reliability is
+    low, the timestamp is updated only when that new location later becomes
+    reliable.
+
+    Older HALP! releases used this entity for a different concept: the last time
+    the reliable/not-reliable Boolean changed. Because that historical timestamp
+    cannot be converted reliably, the first run of this implementation starts a
+    new baseline when the current location is reliable.
     """
 
     def __init__(
@@ -1691,7 +1708,7 @@ class HalpLastReliableChangeSensor(HalpBaseSensor, RestoreEntity):
         entry: ConfigEntry,
         config: dict[str, Any],
     ) -> None:
-        """Initialize the last reliable change sensor."""
+        """Initialize the last reliable location change sensor."""
         super().__init__(
             hass,
             entry,
@@ -1700,27 +1717,32 @@ class HalpLastReliableChangeSensor(HalpBaseSensor, RestoreEntity):
             "mdi:timeline-clock-outline",
         )
 
-        self._last_reliable_state: bool | None = None
+        self._last_reliable_location: str | None = None
         self._last_change: str | None = None
 
     async def async_added_to_hass(self) -> None:
-        """Restore previous state after Home Assistant restart."""
+        """Restore the new reliable-location state after Home Assistant restart."""
         await super().async_added_to_hass()
 
         last_state = await self.async_get_last_state()
         if last_state is None:
             return
 
-        if last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            self._last_change = last_state.state
+        restored_location = last_state.attributes.get("last_reliable_location")
 
-        restored_reliable = last_state.attributes.get("currently_reliable")
-        if isinstance(restored_reliable, bool):
-            self._last_reliable_state = restored_reliable
+        # Only restore timestamps written by this implementation. Previous HALP!
+        # versions stored the time when reliability itself changed, which has a
+        # different meaning and must not be carried forward as though it were a
+        # reliable location-change timestamp.
+        if isinstance(restored_location, str) and is_valid_location_state(restored_location):
+            self._last_reliable_location = restored_location
+
+            if last_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+                self._last_change = last_state.state
 
     @property
     def native_value(self) -> str | None:
-        """Return when reliability last changed."""
+        """Return when HALP! last established a reliable location change."""
         if not self.available:
             return None
 
@@ -1731,18 +1753,21 @@ class HalpLastReliableChangeSensor(HalpBaseSensor, RestoreEntity):
         threshold = reliable_threshold(self.config)
         reliable = confidence >= threshold
 
-        if self._last_reliable_state is None:
-            self._last_reliable_state = reliable
-            self._last_change = datetime.now().isoformat(timespec="seconds")
-        elif reliable != self._last_reliable_state:
-            self._last_reliable_state = reliable
-            self._last_change = datetime.now().isoformat(timespec="seconds")
+        if reliable and is_valid_location_state(vetted_location):
+            if self._last_reliable_location is None:
+                # Establish a baseline for a new installation or for migration
+                # from the older reliability-transition meaning of this sensor.
+                self._last_reliable_location = vetted_location
+                self._last_change = datetime.now().isoformat(timespec="seconds")
+            elif vetted_location != self._last_reliable_location:
+                self._last_reliable_location = vetted_location
+                self._last_change = datetime.now().isoformat(timespec="seconds")
 
         return format_dashboard_datetime(self._last_change)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return current reliability details."""
+        """Return current reliability and last reliable-location details."""
         if not self.available:
             return self._missing_person_attributes()
 
@@ -1756,4 +1781,5 @@ class HalpLastReliableChangeSensor(HalpBaseSensor, RestoreEntity):
             "confidence": confidence,
             "threshold": threshold,
             "vetted_location": vetted_location,
+            "last_reliable_location": self._last_reliable_location,
         }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "1.0.4"
+VERSION = "2.0.0"
 
 PLATFORMS = ["sensor", "binary_sensor", "switch"]
 
@@ -15,6 +15,13 @@ CONF_GPS_ENTITIES = "gps_entities"
 CONF_BLE_ENTITIES = "ble_entities"
 CONF_ROUTER_ENTITIES = "router_entities"
 CONF_IGNORED_ENTITIES = "ignored_entities"
+
+# Fixed-location mappings. GPS is intentionally excluded because GPS already
+# reports Home Assistant zone states dynamically.
+CONF_BLE_ZONES = "ble_zones"
+CONF_ROUTER_ZONES = "router_zones"
+CONF_KNOWN_ZONES = "known_zones"
+ROUTER_ZONE_NONE_MOBILE = "__none_mobile__"
 
 CONF_BATTERY_LEVEL_ENTITY = "battery_level_entity"
 CONF_BATTERY_STATE_ENTITY = "battery_state_entity"
@@ -28,6 +35,9 @@ CONF_GPS_WEIGHT = "gps_weight"
 CONF_BLE_WEIGHT = "ble_weight"
 CONF_ROUTER_WEIGHT = "router_weight"
 
+# Keep the stored key names from v1.0.4 for backward compatibility. In v2.0.0
+# the behavior is generalized from home -> not_home to any confirmed GPS
+# location transition.
 CONF_PRIORITIZE_SECOND_GPS_NOT_HOME = "prioritize_second_gps_not_home"
 CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED = (
     "prioritize_second_gps_not_home_reviewed"
@@ -59,12 +69,19 @@ DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME = True
 GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR = 80
 
 # Runtime-only keys. These are kept in hass.data and are never persisted.
-RUNTIME_GPS_NOT_HOME_ARMED = "_gps_not_home_armed"
+# The older names are retained where useful so existing code/entity identity is
+# not needlessly disturbed, but the runtime state is now generic multi-zone.
+RUNTIME_GPS_TRANSITION_CANDIDATES = "_gps_transition_candidates"
 RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE = "_gps_not_home_priority_active"
 RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY = "_gps_not_home_trigger_entity"
+RUNTIME_GPS_PRIORITY_LOCATION = "_gps_priority_location"
 RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER = (
     "_gps_not_home_confidence_high_water"
 )
+
+# Legacy runtime key retained only for compatibility with any in-memory code
+# during a reload. v2.0.0 does not use it as the primary candidate store.
+RUNTIME_GPS_NOT_HOME_ARMED = "_gps_not_home_armed"
 
 FRESHNESS_EXCELLENT_MINUTES = 15
 FRESHNESS_GOOD_MINUTES = 60

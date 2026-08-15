@@ -17,12 +17,15 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_BLE_ENTITIES,
+    CONF_BLE_ZONES,
     CONF_GPS_ENTITIES,
     CONF_IGNORED_ENTITIES,
+    CONF_KNOWN_ZONES,
     CONF_PERSON_ENTITY,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
     CONF_ROUTER_ENTITIES,
+    CONF_ROUTER_ZONES,
     DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
     GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
     DOMAIN,
@@ -30,9 +33,12 @@ from .const import (
     LOCATION_HOME,
     LOCATION_NOT_HOME,
     RUNTIME_GPS_NOT_HOME_ARMED,
+    RUNTIME_GPS_TRANSITION_CANDIDATES,
     RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
     RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
+    RUNTIME_GPS_PRIORITY_LOCATION,
+    ROUTER_ZONE_NONE_MOBILE,
 )
 from .helpers import (
     analyze_sources,
@@ -41,6 +47,8 @@ from .helpers import (
     calculate_consensus_score,
     calculate_source_health,
     calculate_vetted_location,
+    canonical_dynamic_location_state,
+    is_valid_location_state,
     normalize_location_state,
     resolve_person_entity_id,
 )
@@ -81,11 +89,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not review_complete:
         config[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME] = False
 
-    # Runtime-only state for the optional second-GPS-update departure rule.
+    # Runtime-only state for the optional second matching GPS update rule.
     # These values are deliberately not persisted across reloads or restarts.
-    config[RUNTIME_GPS_NOT_HOME_ARMED] = set()
+    config[RUNTIME_GPS_NOT_HOME_ARMED] = set()  # legacy compatibility only
+    config[RUNTIME_GPS_TRANSITION_CANDIDATES] = {}
     config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
     config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+    config[RUNTIME_GPS_PRIORITY_LOCATION] = None
     config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
 
     resolved_person_entity = resolve_person_entity_id(hass, entry)
@@ -120,6 +130,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not config.get("person_missing", False):
         await _async_check_tracker_mismatch(hass, entry, config)
+        await _async_check_fixed_zone_configuration(hass, entry, config)
+        await _async_check_zone_mismatch(hass, entry, config)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
@@ -142,6 +154,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
 
         await _async_check_tracker_mismatch(hass, entry, current_config)
+        await _async_check_fixed_zone_configuration(hass, entry, current_config)
+        await _async_check_zone_mismatch(hass, entry, current_config)
         await _async_update_fast_departure_review_notification(
             hass, entry, current_config
         )
@@ -196,9 +210,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Listen to every scored tracker so the GPS-specific rule can observe an
-    # update whose state remains not_home, while normal arrival evidence can
-    # clear a temporary priority override.
+    # Listen to every scored tracker so the GPS-specific rule can observe a
+    # second update whose location state remains unchanged.
     tracked_entities = _configured_location_trackers(config)
     if tracked_entities:
         async def _async_location_source_event(event: Event) -> None:
@@ -225,22 +238,27 @@ async def _async_handle_location_source_event(
     entry: ConfigEntry,
     event: Event,
 ) -> None:
-    """Apply the optional second not_home GPS update rule.
+    """Apply the optional second matching GPS location update rule.
 
-    The rule is armed only when the vetted result immediately before the GPS
-    home -> not_home transition was home. A later update from that same GPS
-    entity, with both old and new states still not_home, activates the temporary
-    priority override.
+    If GPS changes from the previously vetted location to a different valid
+    Home Assistant location, HALP! remembers the new value as a candidate. A
+    later update from the same GPS entity that still reports that same value
+    activates a temporary priority result for that location. This works for
+    Home, named zones, and ``not_home``.
 
-    While the override is active, confidence starts at no less than 80 percent
-    and uses a runtime high-water mark so it may rise as other sources catch up
-    but cannot fall. The override is cleared when normal voting independently
-    reaches not_home or when a configured source produces a new positive Home
-    transition.
+    If GPS moves again before confirmation, the candidate is replaced. Thus
+    ``school -> not_home -> park -> park`` confirms Park, not the transient
+    ``not_home`` state.
     """
     config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if not isinstance(config, dict):
         return
+
+    def clear_priority() -> None:
+        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
+        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+        config[RUNTIME_GPS_PRIORITY_LOCATION] = None
+        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
 
     if not bool(
         config.get(
@@ -248,77 +266,81 @@ async def _async_handle_location_source_event(
             DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
         )
     ):
+        config[RUNTIME_GPS_TRANSITION_CANDIDATES] = {}
         config[RUNTIME_GPS_NOT_HOME_ARMED] = set()
-        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
-        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
-        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+        clear_priority()
         return
 
     entity_id = event.data.get("entity_id")
     old_state = event.data.get("old_state")
     new_state = event.data.get("new_state")
-
     if not isinstance(entity_id, str) or old_state is None or new_state is None:
         return
 
-    old_normalized = normalize_location_state(old_state.state)
-    new_normalized = normalize_location_state(new_state.state)
     gps_entities = set(config.get(CONF_GPS_ENTITIES, []))
-    armed = config.get(RUNTIME_GPS_NOT_HOME_ARMED)
-    if not isinstance(armed, set):
-        armed = set()
-        config[RUNTIME_GPS_NOT_HOME_ARMED] = armed
-
-    # A fresh positive Home transition must remain able to restore Home using
-    # the existing HALP! rules, even if an earlier GPS sequence forced Away.
-    if new_normalized == LOCATION_HOME and old_normalized != LOCATION_HOME:
-        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
-        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
-        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
-        armed.clear()
+    if entity_id not in gps_entities:
         return
 
-    if entity_id in gps_entities:
-        if old_normalized == LOCATION_HOME and new_normalized == LOCATION_NOT_HOME:
-            # Reconstruct the pre-event vote by analyzing current sources and
-            # substituting this GPS entity's previous Home state.
-            results = analyze_sources(hass, config)
-            for result in results:
-                if result.entity_id == entity_id:
-                    result.raw_state = old_state.state
-                    result.normalized_state = old_normalized
-                    result.usable = True
-                result.prioritize_second_gps_not_home_active = False
-                result.gps_priority_confidence_floor = 0
+    old_location = canonical_dynamic_location_state(hass, old_state.state)
+    new_location = canonical_dynamic_location_state(hass, new_state.state)
+    candidates = config.get(RUNTIME_GPS_TRANSITION_CANDIDATES)
+    if not isinstance(candidates, dict):
+        candidates = {}
+        config[RUNTIME_GPS_TRANSITION_CANDIDATES] = candidates
 
-            if calculate_vetted_location(results) == LOCATION_HOME:
-                armed.add(entity_id)
-            else:
-                armed.discard(entity_id)
+    active_target = config.get(RUNTIME_GPS_PRIORITY_LOCATION)
 
-        elif (
-            entity_id in armed
-            and old_normalized == LOCATION_NOT_HOME
-            and new_normalized == LOCATION_NOT_HOME
-        ):
-            config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = True
-            config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = entity_id
-            config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = (
-                GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR
-            )
-            armed.discard(entity_id)
+    # If the GPS itself moves away from an active priority target, that target
+    # is no longer current. Clear it before considering the new candidate.
+    if (
+        config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False)
+        and isinstance(active_target, str)
+        and new_location != active_target
+    ):
+        clear_priority()
 
-        elif new_normalized != LOCATION_NOT_HOME:
-            armed.discard(entity_id)
+    if not is_valid_location_state(new_location):
+        candidates.pop(entity_id, None)
+        return
+
+    if old_location != new_location:
+        # Reconstruct the ordinary vote immediately before this GPS transition.
+        results = analyze_sources(hass, config)
+        for result in results:
+            result.prioritize_second_gps_not_home_active = False
+            result.gps_priority_confidence_floor = 0
+            result.gps_priority_location = None
+            if result.entity_id == entity_id:
+                result.raw_state = old_state.state
+                result.normalized_state = old_location
+                result.usable = is_valid_location_state(old_location)
+
+        previous_vetted = calculate_vetted_location(results)
+
+        # A new location different from the previously vetted result becomes
+        # the candidate. A different GPS transition replaces any older one.
+        if new_location != previous_vetted:
+            candidates[entity_id] = new_location
+        else:
+            candidates.pop(entity_id, None)
+
+    elif candidates.get(entity_id) == new_location:
+        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = True
+        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = entity_id
+        config[RUNTIME_GPS_PRIORITY_LOCATION] = new_location
+        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = (
+            GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR
+        )
+        candidates.pop(entity_id, None)
 
     if config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False):
-        # Preserve a non-decreasing confidence value while the temporary
-        # fast-departure override remains active.
+        target = config.get(RUNTIME_GPS_PRIORITY_LOCATION)
+        if not isinstance(target, str) or not is_valid_location_state(target):
+            clear_priority()
+            return
+
         current_results = analyze_sources(hass, config)
-        base_confidence = calculate_base_confidence(
-            current_results,
-            LOCATION_NOT_HOME,
-        )
+        base_confidence = calculate_base_confidence(current_results, target)
         current_high_water = int(
             config.get(
                 RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
@@ -331,17 +353,160 @@ async def _async_handle_location_source_event(
             base_confidence,
         )
 
-        # Once ordinary weighted voting independently says not_home, the
-        # temporary override and its high-water mark are no longer needed.
         ordinary_results = analyze_sources(hass, config)
         for result in ordinary_results:
             result.prioritize_second_gps_not_home_active = False
             result.gps_priority_confidence_floor = 0
+            result.gps_priority_location = None
 
-        if calculate_vetted_location(ordinary_results) == LOCATION_NOT_HOME:
-            config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
-            config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
-            config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+        if calculate_vetted_location(ordinary_results) == target:
+            clear_priority()
+
+
+async def _async_check_fixed_zone_configuration(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    config: dict[str, Any],
+) -> None:
+    """Notify until every fixed BLE/router source has a valid zone mapping.
+
+    v2.0.0 introduced explicit fixed-zone assignments. Existing HALP! entries
+    therefore need to open Configure once after upgrade and assign each BLE
+    tracker to exactly one active zone and each fixed WiFi/router tracker to
+    exactly one active zone. A router source explicitly configured as
+    None / Mobile is valid without a zone.
+
+    This check is deliberately independent of the zone-inventory mismatch
+    notification. The configuration-required notification means a source is
+    not yet safely usable for multi-zone scoring. The zone-inventory
+    notification means Home Assistant's set of zones changed after HALP! was
+    configured, even if no existing source assignment needs to change.
+    """
+    active_zones = {
+        state.entity_id
+        for state in hass.states.async_all("zone")
+        if not bool(state.attributes.get("passive", False))
+    }
+
+    ble_entities = [
+        entity_id
+        for entity_id in config.get(CONF_BLE_ENTITIES, [])
+        if isinstance(entity_id, str)
+    ]
+    router_entities = [
+        entity_id
+        for entity_id in config.get(CONF_ROUTER_ENTITIES, [])
+        if isinstance(entity_id, str)
+    ]
+
+    ble_zones = config.get(CONF_BLE_ZONES, {})
+    if not isinstance(ble_zones, dict):
+        ble_zones = {}
+
+    router_zones = config.get(CONF_ROUTER_ZONES, {})
+    if not isinstance(router_zones, dict):
+        router_zones = {}
+
+    missing_ble = [
+        entity_id
+        for entity_id in ble_entities
+        if ble_zones.get(entity_id) not in active_zones
+    ]
+    missing_router = []
+    for entity_id in router_entities:
+        assignment = router_zones.get(entity_id)
+        if assignment == ROUTER_ZONE_NONE_MOBILE:
+            continue
+        if assignment not in active_zones:
+            missing_router.append(entity_id)
+
+    notification_id = f"{DOMAIN}_fixed_zone_configuration_{entry.entry_id}"
+
+    if not missing_ble and not missing_router:
+        await hass.services.async_call(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": notification_id},
+            blocking=False,
+        )
+        return
+
+    lines = [
+        "HALP! multi-zone configuration is incomplete for this Person.",
+        "Open Settings → Devices & services → HALP!, then click the gear icon for this Person to review/update the fixed-location zone assignments.",
+        "GPS trackers do not need a zone assignment because Home Assistant reports their current zone dynamically.",
+    ]
+    if missing_ble:
+        lines.append(
+            "BLE trackers requiring exactly one active zone: "
+            + ", ".join(sorted(missing_ble))
+        )
+    if missing_router:
+        lines.append(
+            "WiFi/router trackers requiring one active zone or None / Mobile: "
+            + ", ".join(sorted(missing_router))
+        )
+
+    await hass.services.async_call(
+        "persistent_notification",
+        "create",
+        {
+            "title": f"HALP! zone assignment required for {entry.title}",
+            "message": "\n\n".join(lines),
+            "notification_id": notification_id,
+        },
+        blocking=False,
+    )
+
+
+async def _async_check_zone_mismatch(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    config: dict[str, Any],
+) -> None:
+    """Notify when the set of active Home Assistant zones has changed."""
+    current_zones = {
+        state.entity_id
+        for state in hass.states.async_all("zone")
+        if not bool(state.attributes.get("passive", False))
+    }
+    known = config.get(CONF_KNOWN_ZONES)
+    if not isinstance(known, list):
+        # Entries created before v2.0.0 have no zone inventory yet. Do not
+        # create noise on upgrade; Configure will establish the baseline.
+        return
+    known_zones = {zone for zone in known if isinstance(zone, str)}
+    added = sorted(current_zones - known_zones)
+    removed = sorted(known_zones - current_zones)
+    notification_id = f"{DOMAIN}_zone_mismatch_{entry.entry_id}"
+
+    if not added and not removed:
+        await hass.services.async_call(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": notification_id},
+            blocking=False,
+        )
+        return
+
+    lines = [
+        "Home Assistant's active zone set changed after this HALP! entry was configured.",
+        "Open Settings → Devices & services → HALP!, then click the gear icon for this Person to review/update the fixed BLE and WiFi/router zone assignments.",
+    ]
+    if added:
+        lines.append("Added zones: " + ", ".join(added))
+    if removed:
+        lines.append("Removed zones: " + ", ".join(removed))
+    await hass.services.async_call(
+        "persistent_notification",
+        "create",
+        {
+            "title": f"HALP! zone configuration changed for {entry.title}",
+            "message": "\n\n".join(lines),
+            "notification_id": notification_id,
+        },
+        blocking=False,
+    )
 
 
 async def _async_check_tracker_mismatch(
@@ -398,9 +563,10 @@ async def _async_check_tracker_mismatch(
         message_parts.append("")
 
     message_parts.append(
-        "Open the HALP! integration entry and choose Configure to update "
-        "the tracker assignments. Use Ignore for assigned Person trackers "
-        "that should be intentionally excluded from HALP! analysis."
+        "Open Settings → Devices & services → HALP!, then click the gear icon "
+        "for this Person to review/update the tracker assignments. Use Ignore "
+        "for assigned Person trackers that should be intentionally excluded "
+        "from HALP! analysis."
     )
 
     await hass.services.async_call(
@@ -539,12 +705,12 @@ async def _async_update_fast_departure_review_notification(
         {
             "title": f"HALP! configuration review required for {entry.title}",
             "message": (
-                "HALP! added the option **Speed up 'not_home' transition: "
-                "prioritize second 'not_home' GPS update.**\n\n"
+                "HALP! added the option **Speed up location transitions: "
+                "prioritize second matching GPS location update.**\n\n"
                 "For existing HALP! entries, this option remains disabled until "
                 "you review it. Open **Settings → Devices & services → HALP!**, "
-                "choose **Configure** for this person, select the setting you "
-                "want, and save the configuration.\n\n"
+                "then click the **gear icon for this Person**, review the setting "
+                "you want, and save the configuration.\n\n"
                 "This notification will be recreated until the Configure flow "
                 "has been saved."
             ),

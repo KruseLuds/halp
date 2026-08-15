@@ -14,16 +14,19 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_BLE_ENTITIES,
+    CONF_BLE_ZONES,
     CONF_BLE_WEIGHT,
     CONF_GPS_ENTITIES,
     CONF_GPS_WEIGHT,
     CONF_IGNORED_ENTITIES,
+    CONF_KNOWN_ZONES,
     CONF_PERSON_ENTITY,
     CONF_PERSON_UNIQUE_ID,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
     CONF_RELIABLE_THRESHOLD,
     CONF_ROUTER_ENTITIES,
+    CONF_ROUTER_ZONES,
     CONF_ROUTER_WEIGHT,
     DEFAULT_BLE_WEIGHT,
     DEFAULT_GPS_WEIGHT,
@@ -31,6 +34,7 @@ from .const import (
     DEFAULT_ROUTER_WEIGHT,
     DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
     DOMAIN,
+    ROUTER_ZONE_NONE_MOBILE,
 )
 
 PERSON_STORAGE_KEY = "person"
@@ -50,6 +54,33 @@ def classification_options() -> list[str]:
     # Other remains a normal non-location classification.
     # Ignore means the tracker is intentionally excluded from HALP!.
     return [CLASS_GPS, CLASS_BLE, CLASS_WIFI, CLASS_OTHER, CLASS_IGNORE]
+
+
+def _active_zone_options(hass, include_mobile: bool = False) -> list[dict[str, str]]:
+    """Return current non-passive Home Assistant zones for selectors."""
+    options: list[dict[str, str]] = []
+    for state in sorted(
+        hass.states.async_all("zone"),
+        key=lambda item: str(item.attributes.get("friendly_name", item.entity_id)).casefold(),
+    ):
+        if bool(state.attributes.get("passive", False)):
+            continue
+        label = state.attributes.get("friendly_name")
+        if not isinstance(label, str) or not label:
+            label = state.entity_id
+        options.append({"value": state.entity_id, "label": label})
+    if include_mobile:
+        options.append({"value": ROUTER_ZONE_NONE_MOBILE, "label": "None / Mobile"})
+    return options
+
+
+def _active_zone_ids(hass) -> set[str]:
+    """Return entity IDs of current non-passive zones."""
+    return {
+        state.entity_id
+        for state in hass.states.async_all("zone")
+        if not bool(state.attributes.get("passive", False))
+    }
 
 
 class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -145,27 +176,7 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_ROUTER_ENTITIES] = router_entities
                 self._data[CONF_IGNORED_ENTITIES] = ignored_entities
 
-                # Save default tuning values. The user can change these later
-                # from the Configure button on the integration entry.
-                self._data[CONF_RELIABLE_THRESHOLD] = DEFAULT_RELIABLE_THRESHOLD
-                self._data[CONF_GPS_WEIGHT] = DEFAULT_GPS_WEIGHT
-                self._data[CONF_BLE_WEIGHT] = DEFAULT_BLE_WEIGHT
-                self._data[CONF_ROUTER_WEIGHT] = DEFAULT_ROUTER_WEIGHT
-                self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME] = (
-                    DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME
-                )
-                # A new installation with GPS receives the enabled default and
-                # is considered reviewed. If no GPS source is configured, keep
-                # the review flag False so the option is presented if GPS is
-                # added later.
-                self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED] = bool(
-                    gps_entities
-                )
-
-                return self.async_create_entry(
-                    title=self._person_name(),
-                    data=self._data,
-                )
+                return await self.async_step_assign_fixed_zones_v2()
 
         return self.async_show_form(
             step_id="classify_person_sources_v2",
@@ -178,6 +189,80 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "person_name": self._person_name(),
             },
         )
+
+    async def async_step_assign_fixed_zones_v2(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Assign each fixed BLE/router tracker to its one physical zone."""
+        ble_entities = self._data.get(CONF_BLE_ENTITIES, [])
+        router_entities = self._data.get(CONF_ROUTER_ENTITIES, [])
+        active_zones = _active_zone_ids(self.hass)
+
+        if not ble_entities and not router_entities:
+            self._data[CONF_BLE_ZONES] = {}
+            self._data[CONF_ROUTER_ZONES] = {}
+            return self._finish_initial_setup()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            ble_zones: dict[str, str] = {}
+            router_zones: dict[str, str] = {}
+            for entity_id in ble_entities:
+                zone_id = user_input.get(entity_id)
+                if not isinstance(zone_id, str) or zone_id not in active_zones:
+                    errors["base"] = "fixed_zone_required"
+                    break
+                ble_zones[entity_id] = zone_id
+            if not errors:
+                for entity_id in router_entities:
+                    zone_id = user_input.get(entity_id)
+                    if not isinstance(zone_id, str) or (
+                        zone_id != ROUTER_ZONE_NONE_MOBILE and zone_id not in active_zones
+                    ):
+                        errors["base"] = "fixed_zone_required"
+                        break
+                    router_zones[entity_id] = zone_id
+            if not errors:
+                self._data[CONF_BLE_ZONES] = ble_zones
+                self._data[CONF_ROUTER_ZONES] = router_zones
+                return self._finish_initial_setup()
+
+        schema_fields: dict[Any, Any] = {}
+        home_default = "zone.home" if "zone.home" in active_zones else next(iter(active_zones), None)
+        for entity_id in ble_entities:
+            schema_fields[vol.Required(entity_id, default=home_default)] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=_active_zone_options(self.hass),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        for entity_id in router_entities:
+            schema_fields[vol.Required(entity_id, default=home_default or ROUTER_ZONE_NONE_MOBILE)] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=_active_zone_options(self.hass, include_mobile=True),
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        return self.async_show_form(
+            step_id="assign_fixed_zones_v2",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+            description_placeholders={"person_name": self._person_name()},
+        )
+
+    def _finish_initial_setup(self) -> config_entries.ConfigFlowResult:
+        """Apply default tuning and finish first-time setup."""
+        self._data[CONF_RELIABLE_THRESHOLD] = DEFAULT_RELIABLE_THRESHOLD
+        self._data[CONF_GPS_WEIGHT] = DEFAULT_GPS_WEIGHT
+        self._data[CONF_BLE_WEIGHT] = DEFAULT_BLE_WEIGHT
+        self._data[CONF_ROUTER_WEIGHT] = DEFAULT_ROUTER_WEIGHT
+        self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME] = DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME
+        self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED] = bool(
+            self._data.get(CONF_GPS_ENTITIES, [])
+        )
+        self._data[CONF_KNOWN_ZONES] = sorted(_active_zone_ids(self.hass))
+        return self.async_create_entry(title=self._person_name(), data=self._data)
 
     def _classified_groups(
         self,
@@ -450,7 +535,7 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                 self._data[CONF_ROUTER_ENTITIES] = router_entities
                 self._data[CONF_IGNORED_ENTITIES] = ignored_entities
 
-                return await self.async_step_tuning()
+                return await self.async_step_assign_fixed_zones()
 
         return self.async_show_form(
             step_id="classify_person_sources",
@@ -464,11 +549,83 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
             },
         )
 
+    async def async_step_assign_fixed_zones(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Reconcile and edit fixed BLE/router zone assignments."""
+        current = {**dict(self._config_entry.data), **dict(self._config_entry.options), **dict(self._data)}
+        ble_entities = self._data.get(CONF_BLE_ENTITIES, [])
+        router_entities = self._data.get(CONF_ROUTER_ENTITIES, [])
+        active_zones = _active_zone_ids(self.hass)
+
+        if not ble_entities and not router_entities:
+            self._data[CONF_BLE_ZONES] = {}
+            self._data[CONF_ROUTER_ZONES] = {}
+            return await self.async_step_tuning()
+
+        stored_ble = current.get(CONF_BLE_ZONES, {})
+        if not isinstance(stored_ble, dict):
+            stored_ble = {}
+        stored_router = current.get(CONF_ROUTER_ZONES, {})
+        if not isinstance(stored_router, dict):
+            stored_router = {}
+
+        # Reconcile deleted zones and trackers by building assignments only for
+        # the trackers and active zones that still exist now. Legacy entries
+        # without mappings default to Home to preserve v1.0.4 behavior.
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            ble_zones: dict[str, str] = {}
+            router_zones: dict[str, str] = {}
+            for entity_id in ble_entities:
+                zone_id = user_input.get(entity_id)
+                if not isinstance(zone_id, str) or zone_id not in active_zones:
+                    errors["base"] = "fixed_zone_required"
+                    break
+                ble_zones[entity_id] = zone_id
+            if not errors:
+                for entity_id in router_entities:
+                    zone_id = user_input.get(entity_id)
+                    if not isinstance(zone_id, str) or (
+                        zone_id != ROUTER_ZONE_NONE_MOBILE and zone_id not in active_zones
+                    ):
+                        errors["base"] = "fixed_zone_required"
+                        break
+                    router_zones[entity_id] = zone_id
+            if not errors:
+                self._data[CONF_BLE_ZONES] = ble_zones
+                self._data[CONF_ROUTER_ZONES] = router_zones
+                return await self.async_step_tuning()
+
+        home_default = "zone.home" if "zone.home" in active_zones else next(iter(active_zones), None)
+        schema_fields: dict[Any, Any] = {}
+        for entity_id in ble_entities:
+            default = stored_ble.get(entity_id, "zone.home")
+            if default not in active_zones:
+                default = home_default
+            schema_fields[vol.Required(entity_id, default=default)] = selector.SelectSelector(
+                selector.SelectSelectorConfig(options=_active_zone_options(self.hass), mode=selector.SelectSelectorMode.DROPDOWN)
+            )
+        for entity_id in router_entities:
+            default = stored_router.get(entity_id, "zone.home")
+            if default != ROUTER_ZONE_NONE_MOBILE and default not in active_zones:
+                default = home_default or ROUTER_ZONE_NONE_MOBILE
+            schema_fields[vol.Required(entity_id, default=default)] = selector.SelectSelector(
+                selector.SelectSelectorConfig(options=_active_zone_options(self.hass, include_mobile=True), mode=selector.SelectSelectorMode.DROPDOWN)
+            )
+        return self.async_show_form(
+            step_id="assign_fixed_zones",
+            data_schema=vol.Schema(schema_fields),
+            errors=errors,
+            description_placeholders={"person_name": self._person_name()},
+        )
+
     async def async_step_tuning(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> config_entries.ConfigFlowResult:
-        """Edit reliability threshold, source weights, and GPS departure behavior."""
+        """Edit reliability threshold, source weights, and GPS location-transition behavior."""
         current = {
             **dict(self._config_entry.data),
             **dict(self._config_entry.options),
@@ -508,8 +665,11 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_PERSON_UNIQUE_ID: self._data.get(CONF_PERSON_UNIQUE_ID),
                     CONF_GPS_ENTITIES: self._data.get(CONF_GPS_ENTITIES, []),
                     CONF_BLE_ENTITIES: self._data.get(CONF_BLE_ENTITIES, []),
+                    CONF_BLE_ZONES: self._data.get(CONF_BLE_ZONES, {}),
                     CONF_ROUTER_ENTITIES: self._data.get(CONF_ROUTER_ENTITIES, []),
+                    CONF_ROUTER_ZONES: self._data.get(CONF_ROUTER_ZONES, {}),
                     CONF_IGNORED_ENTITIES: self._data.get(CONF_IGNORED_ENTITIES, []),
+                    CONF_KNOWN_ZONES: sorted(_active_zone_ids(self.hass)),
                     CONF_RELIABLE_THRESHOLD: user_input[CONF_RELIABLE_THRESHOLD],
                     CONF_GPS_WEIGHT: user_input[CONF_GPS_WEIGHT],
                     CONF_BLE_WEIGHT: user_input[CONF_BLE_WEIGHT],

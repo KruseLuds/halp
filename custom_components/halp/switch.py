@@ -18,7 +18,7 @@ from .const import (
     NAME,
 )
 
-SETTING_LABEL = "Speed up 'not_home' transition"
+SETTING_LABEL = "Speed up location transitions"
 NO_GPS_COMMENT = (
     "Unavailable (there is no GPS tracker sensor configured for this person)"
 )
@@ -38,7 +38,7 @@ async def async_setup_entry(
 
 
 class HalpPrioritizeSecondGpsNotHomeSwitch(SwitchEntity):
-    """Enable the second not_home GPS update fast-departure rule."""
+    """Enable the second matching GPS location update transition rule."""
 
     _attr_icon = "mdi:map-marker-fast"
     _attr_should_poll = False
@@ -52,7 +52,7 @@ class HalpPrioritizeSecondGpsNotHomeSwitch(SwitchEntity):
         self.hass = hass
         self.entry = entry
         self.config = config
-        self._attr_name = f"{NAME} {entry.title} Speed Up Not Home Transition"
+        self._attr_name = f"{NAME} {entry.title} Speed Up Location Transitions"
         self._attr_unique_id = (
             f"{DOMAIN}_{entry.entry_id}_prioritize_second_gps_not_home"
         )
@@ -83,7 +83,7 @@ class HalpPrioritizeSecondGpsNotHomeSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return whether the fast-departure rule is enabled."""
+        """Return whether the fast-transition rule is enabled."""
         return bool(
             self.config.get(
                 CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
@@ -113,9 +113,11 @@ class HalpPrioritizeSecondGpsNotHomeSwitch(SwitchEntity):
             "setting_label": SETTING_LABEL,
             "status_comment": status_comment,
             "behavior": (
-                "When Vetted Location was home, GPS changes from home to "
-                "not_home, and that GPS tracker then updates again while still "
-                "not_home, HALP! immediately sets Vetted Location to not_home."
+                "When a configured GPS tracker changes to a location different "
+                "from the current Vetted Location and then updates again while "
+                "still reporting that same new location, HALP! can prioritize "
+                "the confirmed location. This applies to Home, named zones, "
+                "and not_home."
             ),
         }
 

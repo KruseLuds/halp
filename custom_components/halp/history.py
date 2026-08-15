@@ -31,7 +31,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import LOCATION_HOME, LOCATION_NOT_HOME, LOCATION_UNKNOWN
+from .const import LOCATION_HOME, LOCATION_NOT_HOME, LOCATION_UNKNOWN, LOCATION_UNAVAILABLE, LOCATION_MISSING
 from .helpers import SourceResult
 
 STORAGE_KEY = "halp_history"
@@ -129,7 +129,7 @@ def build_history_sample(
             [
                 result
                 for result in results
-                if result.normalized_state in (LOCATION_HOME, LOCATION_NOT_HOME) and not result.usable
+                if result.normalized_state not in (LOCATION_UNKNOWN, LOCATION_UNAVAILABLE, LOCATION_MISSING) and result.freshness_factor <= 0
             ]
         ),
         "sources": [
@@ -150,6 +150,8 @@ def blank_daily_summary(date_key: str) -> dict[str, Any]:
         "average_consensus": None,
         "home_samples": 0,
         "away_samples": 0,
+        "named_zone_samples": 0,
+        "zone_samples": {},
         "unknown_samples": 0,
         "critical_samples": 0,
         "poor_samples": 0,
@@ -206,6 +208,13 @@ def update_daily_summary(
         daily_summary["away_samples"] = daily_summary.get("away_samples", 0) + 1
     elif vetted_location == LOCATION_UNKNOWN:
         daily_summary["unknown_samples"] = daily_summary.get("unknown_samples", 0) + 1
+    elif isinstance(vetted_location, str) and vetted_location:
+        daily_summary["named_zone_samples"] = daily_summary.get("named_zone_samples", 0) + 1
+        zone_samples = daily_summary.get("zone_samples")
+        if not isinstance(zone_samples, dict):
+            zone_samples = {}
+            daily_summary["zone_samples"] = zone_samples
+        zone_samples[vetted_location] = int(zone_samples.get(vetted_location, 0)) + 1
 
     source_health = sample.get("source_health")
     if source_health == "Critical":

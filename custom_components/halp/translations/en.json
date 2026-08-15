@@ -13,10 +13,16 @@
         "title": "Classify assigned location sources",
         "description": "Below are the trackers assigned to {person_name}. Classify each source as GPS, BLE, WiFi/router, Other, or Ignore. Ignore excludes the assigned tracker from HALP! analysis and suppresses tracker mismatch warnings for that tracker.",
         "data": {}
+      },
+      "assign_fixed_zones_v2": {
+        "title": "Assign fixed trackers to zones",
+        "description": "Assign each BLE and fixed WiFi/router tracker for {person_name} to exactly one active Home Assistant zone. GPS trackers need no zone assignment because they report zones dynamically. For a genuinely mobile WiFi/router source, choose None / Mobile; it will remain visible in diagnostics but will not vote for an absolute geographic zone.",
+        "data": {}
       }
     },
     "error": {
-      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router."
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router.",
+      "fixed_zone_required": "Every BLE tracker must have one active zone. Every WiFi/router tracker must have one active zone or None / Mobile."
     },
     "abort": {
       "already_configured": "This Person entity is already configured in HALP!."
@@ -39,18 +45,24 @@
       },
       "tuning": {
         "title": "Tune HALP! reliability scoring",
-        "description": "Adjust HALP!'s fast not_home transition option, reliability threshold, and source weights.",
+        "description": "Adjust HALP!'s GPS location-transition speedup option, reliability threshold, and source weights. The same weights and thresholds apply in every zone.",
         "data": {
           "reliable_threshold": "Reliability threshold % (0-100):",
           "gps_weight": "GPS source weight (0-200):",
           "ble_weight": "BLE source weight (0-200):",
           "router_weight": "WiFi/router source weight (0-200):",
-          "prioritize_second_gps_not_home": "Speed up 'not_home' transition: prioritize second 'not_home' GPS update."
+          "prioritize_second_gps_not_home": "Speed up location transitions: prioritize second matching GPS location update."
         }
+      },
+      "assign_fixed_zones": {
+        "title": "Assign fixed trackers to zones",
+        "description": "Assign each BLE and fixed WiFi/router tracker for {person_name} to exactly one active Home Assistant zone. Deleted trackers and deleted zones are discarded when this flow is saved. GPS needs no zone assignment. For a genuinely mobile WiFi/router source, choose None / Mobile; it will remain visible in diagnostics but will not vote for an absolute geographic zone.",
+        "data": {}
       }
     },
     "error": {
-      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router."
+      "at_least_one_classified_source_required": "At least one assigned tracker must be classified as GPS, BLE, or WiFi/router.",
+      "fixed_zone_required": "Every BLE tracker must have one active zone. Every WiFi/router tracker must have one active zone or None / Mobile."
     }
   }
 }

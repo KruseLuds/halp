@@ -9,15 +9,18 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_BLE_ENTITIES,
+    CONF_BLE_ZONES,
     CONF_BLE_WEIGHT,
     CONF_GPS_ENTITIES,
     CONF_GPS_WEIGHT,
     CONF_IGNORED_ENTITIES,
+    CONF_KNOWN_ZONES,
     CONF_PERSON_ENTITY,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
     CONF_RELIABLE_THRESHOLD,
     CONF_ROUTER_ENTITIES,
+    CONF_ROUTER_ZONES,
     CONF_ROUTER_WEIGHT,
     DEFAULT_BLE_WEIGHT,
     DEFAULT_GPS_WEIGHT,
@@ -60,10 +63,20 @@ async def async_get_config_entry_diagnostics(
             "total": scored_total,
             "accounted_total": scored_total + len(ignored_entities),
         },
+        "zones": {
+            "known_active_zones": config.get(CONF_KNOWN_ZONES, []),
+            "current_active_zones": sorted(
+                state.entity_id
+                for state in hass.states.async_all("zone")
+                if not bool(state.attributes.get("passive", False))
+            ),
+        },
         "configured_sources": {
             "gps": gps_entities,
             "ble": ble_entities,
+            "ble_zones": config.get(CONF_BLE_ZONES, {}),
             "router": router_entities,
+            "router_zones": config.get(CONF_ROUTER_ZONES, {}),
             "ignored": ignored_entities,
         },
         "tuning": {
@@ -74,11 +87,11 @@ async def async_get_config_entry_diagnostics(
             "gps_weight": config.get(CONF_GPS_WEIGHT, DEFAULT_GPS_WEIGHT),
             "ble_weight": config.get(CONF_BLE_WEIGHT, DEFAULT_BLE_WEIGHT),
             "router_weight": config.get(CONF_ROUTER_WEIGHT, DEFAULT_ROUTER_WEIGHT),
-            "prioritize_second_gps_not_home": config.get(
+            "prioritize_second_matching_gps_location": config.get(
                 CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
                 DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
             ),
-            "prioritize_second_gps_not_home_reviewed": config.get(
+            "prioritize_second_matching_gps_location_reviewed": config.get(
                 CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
                 False,
             ),
