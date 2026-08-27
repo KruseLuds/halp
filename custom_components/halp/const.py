@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 PLATFORMS = ["sensor", "binary_sensor", "switch"]
 
@@ -35,7 +35,7 @@ CONF_GPS_WEIGHT = "gps_weight"
 CONF_BLE_WEIGHT = "ble_weight"
 CONF_ROUTER_WEIGHT = "router_weight"
 
-# Keep the stored key names from v1.0.4 for backward compatibility. In v2.0.0
+# Keep the stored key names from v1.0.4 for backward compatibility. Since v2.0.0
 # the behavior is generalized from home -> not_home to any confirmed GPS
 # location transition.
 CONF_PRIORITIZE_SECOND_GPS_NOT_HOME = "prioritize_second_gps_not_home"
@@ -72,6 +72,11 @@ GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR = 80
 # The older names are retained where useful so existing code/entity identity is
 # not needlessly disturbed, but the runtime state is now generic multi-zone.
 RUNTIME_GPS_TRANSITION_CANDIDATES = "_gps_transition_candidates"
+RUNTIME_GPS_TRANSITION_ORIGINS = "_gps_transition_origins"
+RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS = "_gps_departed_zone_contexts"
+RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE = "_fixed_arrival_priority_active"
+RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION = "_fixed_arrival_priority_location"
+RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY = "_fixed_arrival_priority_entity"
 RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE = "_gps_not_home_priority_active"
 RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY = "_gps_not_home_trigger_entity"
 RUNTIME_GPS_PRIORITY_LOCATION = "_gps_priority_location"
@@ -80,7 +85,7 @@ RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER = (
 )
 
 # Legacy runtime key retained only for compatibility with any in-memory code
-# during a reload. v2.0.0 does not use it as the primary candidate store.
+# during a reload. v2.1.0 does not use it as the primary candidate store.
 RUNTIME_GPS_NOT_HOME_ARMED = "_gps_not_home_armed"
 
 FRESHNESS_EXCELLENT_MINUTES = 15

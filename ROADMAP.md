@@ -67,16 +67,20 @@
 
 ## Version 2.1
 
-**Status:** Planned
+**Status:** Released
 
--   Investigate and develop additional ways to recognize transitions
-    away from previously confirmed locations even faster, while
-    preserving HALP!'s reliability and anti-jitter protections
--   Home Visit reliability analysis
--   Reliability percentages
--   Reliability trend graphs
--   Enhanced dashboards
--   Additional multi-zone diagnostics and usability refinements
+-   Geographic snap-back protection after second-matching-GPS
+    confirmation of departure from a fixed-source Zone
+-   Actual Home Assistant Zone-circle overlap detection so geographically
+    compatible overlapping Zones continue normal voting
+-   Old fixed BLE/router evidence from a non-overlapping departed Zone
+    cannot resurrect that Zone while the confirming GPS still provides
+    contradictory valid location evidence
+-   Fresh fixed-source `not_home` to positive transitions remain fast
+    arrival evidence and can temporarily take precedence until GPS next
+    updates
+-   Exact preservation of Home Assistant Zone friendly names in
+    human-facing HALP! explanations (bug fix)
 
 ------------------------------------------------------------------------
 
@@ -84,6 +88,11 @@
 
 **Status:** Planned
 
+-   Home Visit reliability analysis
+-   Reliability percentages
+-   Reliability trend graphs
+-   Enhanced dashboards
+-   Additional multi-zone diagnostics and usability refinements
 -   Adaptive source weighting
 -   Smarter confidence calculations
 -   Additional zone-transition reliability analysis

@@ -34,6 +34,11 @@ from .const import (
     LOCATION_NOT_HOME,
     RUNTIME_GPS_NOT_HOME_ARMED,
     RUNTIME_GPS_TRANSITION_CANDIDATES,
+    RUNTIME_GPS_TRANSITION_ORIGINS,
+    RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY,
     RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
     RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
@@ -51,6 +56,8 @@ from .helpers import (
     is_valid_location_state,
     normalize_location_state,
     resolve_person_entity_id,
+    zone_entity_id_for_location,
+    zone_location_state,
 )
 from .history import async_record_history_sample
 
@@ -93,6 +100,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # These values are deliberately not persisted across reloads or restarts.
     config[RUNTIME_GPS_NOT_HOME_ARMED] = set()  # legacy compatibility only
     config[RUNTIME_GPS_TRANSITION_CANDIDATES] = {}
+    config[RUNTIME_GPS_TRANSITION_ORIGINS] = {}
+    config[RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS] = {}
+    config[RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE] = False
+    config[RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION] = None
+    config[RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY] = None
     config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
     config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
     config[RUNTIME_GPS_PRIORITY_LOCATION] = None
@@ -238,37 +250,19 @@ async def _async_handle_location_source_event(
     entry: ConfigEntry,
     event: Event,
 ) -> None:
-    """Apply the optional second matching GPS location update rule.
+    """Handle fixed-source arrivals and the optional GPS transition rule.
 
-    If GPS changes from the previously vetted location to a different valid
-    Home Assistant location, HALP! remembers the new value as a candidate. A
-    later update from the same GPS entity that still reports that same value
-    activates a temporary priority result for that location. This works for
-    Home, named zones, and ``not_home``.
+    A real fixed BLE/router transition from ``not_home`` to positive presence
+    is fresh arrival evidence. HALP! temporarily prioritizes that fixed Zone
+    until GPS publishes its next update.
 
-    If GPS moves again before confirmation, the candidate is replaced. Thus
-    ``school -> not_home -> park -> park`` confirms Park, not the transient
-    ``not_home`` state.
+    Separately, the existing optional second-matching-GPS rule confirms a GPS
+    transition. When that confirmation proves departure from a concrete Zone,
+    HALP! remembers the departure at runtime so old fixed evidence from that
+    Zone cannot later create a geographically impossible snap-back.
     """
     config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if not isinstance(config, dict):
-        return
-
-    def clear_priority() -> None:
-        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
-        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
-        config[RUNTIME_GPS_PRIORITY_LOCATION] = None
-        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
-
-    if not bool(
-        config.get(
-            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
-            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
-        )
-    ):
-        config[RUNTIME_GPS_TRANSITION_CANDIDATES] = {}
-        config[RUNTIME_GPS_NOT_HOME_ARMED] = set()
-        clear_priority()
         return
 
     entity_id = event.data.get("entity_id")
@@ -278,29 +272,132 @@ async def _async_handle_location_source_event(
         return
 
     gps_entities = set(config.get(CONF_GPS_ENTITIES, []))
+    ble_entities = set(config.get(CONF_BLE_ENTITIES, []))
+    router_entities = set(config.get(CONF_ROUTER_ENTITIES, []))
+
+    def clear_gps_priority() -> None:
+        config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = False
+        config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
+        config[RUNTIME_GPS_PRIORITY_LOCATION] = None
+        config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+
+    def clear_fixed_arrival_priority() -> None:
+        config[RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE] = False
+        config[RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION] = None
+        config[RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY] = None
+
+    # Fixed-source positive arrival is intentionally independent of the GPS
+    # speedup switch. A genuine not_home -> positive transition is new arrival
+    # evidence, not a continuation of an old sticky fixed-location state.
+    if entity_id in ble_entities or entity_id in router_entities:
+        if entity_id in ble_entities:
+            zone_map = config.get(CONF_BLE_ZONES, {})
+        else:
+            zone_map = config.get(CONF_ROUTER_ZONES, {})
+
+        if not isinstance(zone_map, dict):
+            zone_map = {}
+
+        zone_entity_id = zone_map.get(entity_id, "zone.home")
+        if (
+            not isinstance(zone_entity_id, str)
+            or zone_entity_id == ROUTER_ZONE_NONE_MOBILE
+        ):
+            zone_entity_id = None
+
+        old_normalized = normalize_location_state(old_state.state)
+        new_normalized = normalize_location_state(new_state.state)
+        new_is_positive = new_normalized not in (
+            LOCATION_NOT_HOME,
+            "unknown",
+            "unavailable",
+            "missing",
+        )
+
+        if (
+            gps_entities
+            and zone_entity_id is not None
+            and old_normalized == LOCATION_NOT_HOME
+            and new_is_positive
+        ):
+            fixed_location = zone_location_state(hass, zone_entity_id)
+            if fixed_location is not None:
+                config[RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE] = True
+                config[RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION] = fixed_location
+                config[RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY] = entity_id
+            return
+
+        if (
+            config.get(RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE, False)
+            and config.get(RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY) == entity_id
+            and not new_is_positive
+        ):
+            clear_fixed_arrival_priority()
+
+        return
+
     if entity_id not in gps_entities:
         return
 
+    # Any GPS update ends a temporary fixed-source arrival priority. The fixed
+    # source remains normal positive evidence after that; only the temporary
+    # "GPS has not updated yet" precedence ends here.
+    clear_fixed_arrival_priority()
+
     old_location = canonical_dynamic_location_state(hass, old_state.state)
     new_location = canonical_dynamic_location_state(hass, new_state.state)
+
+    # Re-entering a concrete Zone removes any older confirmed-departure context
+    # for that Zone. A future departure must be confirmed again before old
+    # fixed evidence can be geographically suppressed.
+    departed_contexts = config.get(RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS)
+    if not isinstance(departed_contexts, dict):
+        departed_contexts = {}
+        config[RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS] = departed_contexts
+
+    entered_zone_entity_id = zone_entity_id_for_location(hass, new_location)
+    if entered_zone_entity_id is not None:
+        departed_contexts.pop(entered_zone_entity_id, None)
+
+    if not bool(
+        config.get(
+            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+        )
+    ):
+        config[RUNTIME_GPS_TRANSITION_CANDIDATES] = {}
+        config[RUNTIME_GPS_TRANSITION_ORIGINS] = {}
+        config[RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS] = {}
+        config[RUNTIME_GPS_NOT_HOME_ARMED] = set()
+        clear_gps_priority()
+        return
+
     candidates = config.get(RUNTIME_GPS_TRANSITION_CANDIDATES)
     if not isinstance(candidates, dict):
         candidates = {}
         config[RUNTIME_GPS_TRANSITION_CANDIDATES] = candidates
 
+    origins = config.get(RUNTIME_GPS_TRANSITION_ORIGINS)
+    if not isinstance(origins, dict):
+        origins = {}
+        config[RUNTIME_GPS_TRANSITION_ORIGINS] = origins
+
     active_target = config.get(RUNTIME_GPS_PRIORITY_LOCATION)
 
-    # If the GPS itself moves away from an active priority target, that target
-    # is no longer current. Clear it before considering the new candidate.
+    # If GPS itself moves away from an active priority target, that target is
+    # no longer current. The separate departed-Zone context remains available
+    # to prevent an older fixed source from resurrecting a Zone already proven
+    # to have been left.
     if (
         config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False)
         and isinstance(active_target, str)
         and new_location != active_target
     ):
-        clear_priority()
+        clear_gps_priority()
 
     if not is_valid_location_state(new_location):
         candidates.pop(entity_id, None)
+        origins.pop(entity_id, None)
         return
 
     if old_location != new_location:
@@ -310,6 +407,8 @@ async def _async_handle_location_source_event(
             result.prioritize_second_gps_not_home_active = False
             result.gps_priority_confidence_floor = 0
             result.gps_priority_location = None
+            result.fixed_arrival_priority_active = False
+            result.fixed_arrival_priority_location = None
             if result.entity_id == entity_id:
                 result.raw_state = old_state.state
                 result.normalized_state = old_location
@@ -318,13 +417,36 @@ async def _async_handle_location_source_event(
         previous_vetted = calculate_vetted_location(results)
 
         # A new location different from the previously vetted result becomes
-        # the candidate. A different GPS transition replaces any older one.
+        # the candidate. Remember the Zone the GPS itself actually left so the
+        # second matching update can confirm that departure.
         if new_location != previous_vetted:
             candidates[entity_id] = new_location
+            origins[entity_id] = old_location
         else:
             candidates.pop(entity_id, None)
+            origins.pop(entity_id, None)
 
     elif candidates.get(entity_id) == new_location:
+        departed_location = origins.get(entity_id)
+        departed_zone_entity_id = zone_entity_id_for_location(
+            hass,
+            departed_location,
+        )
+
+        # The second matching GPS update confirms departure. Record only a
+        # concrete departed Zone. not_home is not itself a Zone that fixed
+        # location sources can be assigned to.
+        if (
+            departed_zone_entity_id is not None
+            and departed_location != new_location
+        ):
+            departed_contexts[departed_zone_entity_id] = {
+                "gps_entity_id": entity_id,
+                "confirmed_at": new_state.last_updated.timestamp(),
+                "departed_location": departed_location,
+                "confirmed_location": new_location,
+            }
+
         config[RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE] = True
         config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = entity_id
         config[RUNTIME_GPS_PRIORITY_LOCATION] = new_location
@@ -332,11 +454,12 @@ async def _async_handle_location_source_event(
             GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR
         )
         candidates.pop(entity_id, None)
+        origins.pop(entity_id, None)
 
     if config.get(RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE, False):
         target = config.get(RUNTIME_GPS_PRIORITY_LOCATION)
         if not isinstance(target, str) or not is_valid_location_state(target):
-            clear_priority()
+            clear_gps_priority()
             return
 
         current_results = analyze_sources(hass, config)
@@ -358,9 +481,11 @@ async def _async_handle_location_source_event(
             result.prioritize_second_gps_not_home_active = False
             result.gps_priority_confidence_floor = 0
             result.gps_priority_location = None
+            result.fixed_arrival_priority_active = False
+            result.fixed_arrival_priority_location = None
 
         if calculate_vetted_location(ordinary_results) == target:
-            clear_priority()
+            clear_gps_priority()
 
 
 async def _async_check_fixed_zone_configuration(

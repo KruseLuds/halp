@@ -116,8 +116,10 @@ class HalpPrioritizeSecondGpsNotHomeSwitch(SwitchEntity):
                 "When a configured GPS tracker changes to a location different "
                 "from the current Vetted Location and then updates again while "
                 "still reporting that same new location, HALP! can prioritize "
-                "the confirmed location. This applies to Home, named zones, "
-                "and not_home."
+                "the confirmed location. After that confirmed departure, old "
+                "fixed-location evidence cannot snap Vetted Location back to "
+                "a geographically incompatible departed zone. A real fixed "
+                "not_home-to-positive transition remains fresh arrival evidence."
             ),
         }
 

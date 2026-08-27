@@ -4,6 +4,37 @@ All notable changes to HALP! will be documented in this file.
 
 This project follows Semantic Versioning (SemVer).
 
+
+# Version 2.1.0
+
+**Release Date:**
+August 27, 2026
+
+## Added
+
+- Added geographic snap-back protection for confirmed GPS departures from fixed-source Zones.
+- After the existing second matching GPS update confirms departure from a Zone, HALP! remembers that confirmed departure at runtime.
+- A fixed BLE or fixed WiFi/router source that was already positively reporting the departed Zone before the confirmed GPS departure is treated as old sticky evidence if it continues reporting that same Zone.
+- If current GPS reports `not_home`, that old fixed evidence cannot pull Vetted Location back to the departed Zone.
+- If current GPS reports another named Zone, HALP! compares the actual Home Assistant Zone circles. Old fixed evidence from the departed Zone is excluded only when the two Zones do not overlap.
+- Added fresh fixed-arrival priority: when a fixed BLE/router source genuinely changes from `not_home` to positive presence for its configured Zone before GPS updates, that new arrival evidence can immediately take precedence until GPS publishes its next update.
+- Added diagnostics showing geographic snap-back suppression and the runtime confirmed-departure context.
+
+## Changed
+
+- Preserved exact Home Assistant Zone friendly names in Location Explanation text instead of applying Python title-casing. This fixes zone names such as `Wendy's` being displayed incorrectly as `Wendy'S`.
+- Geographic snap-back protection is tied to the existing per-Person **Speed up location transitions** option.
+- `unknown` or `unavailable` GPS does not geographically exclude fixed-location evidence.
+- A real fixed-source state change after a confirmed departure is treated as new arrival evidence and is not suppressed as sticky evidence.
+
+## Compatibility
+
+- Vetted Location continues to use Home Assistant-compatible states: `home`, `not_home`, named active Zones, and `unknown`.
+- The new confirmed-departure context is runtime-only and is cleared by a Home Assistant restart or HALP! reload.
+- Existing source weights, freshness calculations, Confidence, Consensus, and Source Health behavior remain in place except that geographically impossible old fixed evidence is excluded from the active vote while the protection rule applies.
+
+------------------------------------------------------------------------
+
   ---------------------
   \# Version 2.0.0
 

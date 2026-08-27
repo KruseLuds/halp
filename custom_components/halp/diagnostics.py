@@ -28,6 +28,10 @@ from .const import (
     DEFAULT_ROUTER_WEIGHT,
     DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
     DOMAIN,
+    RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY,
 )
 
 
@@ -78,6 +82,22 @@ async def async_get_config_entry_diagnostics(
             "router": router_entities,
             "router_zones": config.get(CONF_ROUTER_ZONES, {}),
             "ignored": ignored_entities,
+        },
+        "transition_protection": {
+            "gps_departed_zone_contexts": config.get(
+                RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS,
+                {},
+            ),
+            "fixed_arrival_priority_active": config.get(
+                RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE,
+                False,
+            ),
+            "fixed_arrival_priority_location": config.get(
+                RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION,
+            ),
+            "fixed_arrival_priority_entity": config.get(
+                RUNTIME_FIXED_ARRIVAL_PRIORITY_ENTITY,
+            ),
         },
         "tuning": {
             "reliable_threshold": config.get(

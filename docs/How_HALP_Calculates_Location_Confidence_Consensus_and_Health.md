@@ -13,8 +13,8 @@ technical authority, primarily in `custom_components/halp/helpers.py`.
 HALP! uses Home Assistant-compatible location states. A Vetted Location
 may be:
 
--   `home`
--   `not_home`
+-   `home` (as per HA standard, firendly name is all lowervase)
+-   `not_home` (as per HA standard, friendly name shown as all lowercare `away` and actally specifically means, not in any zone)
 -   the name of an active Home Assistant zone, such as `Work`, `School`,
     or `Park`
 -   `unknown` when HALP! cannot choose a reliable current location from
@@ -152,6 +152,46 @@ zones from being treated as a confirmed intermediate location.
 The temporary priority ends when ordinary weighted voting independently
 reaches the same target location, or when GPS moves to a different
 location before the target is independently supported.
+
+### Geographic snap-back protection
+
+Version 2.1.0 adds a second protection around a GPS-confirmed departure.
+Once the second matching GPS update confirms departure from a concrete
+Zone A, HALP! remembers that departed Zone at runtime.
+
+A fixed BLE/router source assigned to Zone A may be excluded from the
+current vote when its positive state began before that confirmed
+departure and it is still merely reporting the old Zone.
+
+The exclusion applies only while the same confirming GPS source still
+provides contradictory valid location evidence:
+
+-   if GPS reports `not_home`, the old Zone A fixed evidence is
+    geographically incompatible with the confirmed GPS result;
+-   if GPS reports another named Zone B, HALP! compares the current Home
+    Assistant Zone circles using latitude, longitude, and radius;
+-   if Zone A and Zone B do not overlap, the old fixed evidence for Zone
+    A is excluded;
+-   if the Zones overlap, normal voting continues because both Zone
+    memberships can be geographically possible;
+-   `unknown` or `unavailable` GPS does not exclude the fixed evidence.
+
+If a fixed source actually changes state after the confirmed departure,
+its new positive state is not treated as the old sticky evidence.
+
+### Fresh fixed-source arrival priority
+
+A real fixed BLE/router transition from `not_home` to positive presence
+for its configured Zone is fresh arrival evidence. When GPS has not
+updated yet, HALP! temporarily prioritizes that newly detected fixed
+Zone so arrival behavior remains fast.
+
+That temporary fixed-arrival priority ends on the next GPS update. The
+fixed source then remains ordinary positive evidence in the normal
+weighted calculation.
+
+This is intentionally different from a source that never changed from
+its old positive state after departure.
 
 ## 4. Confidence
 

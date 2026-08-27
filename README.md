@@ -18,9 +18,25 @@ Instead, HALP! analyzes the location information Home Assistant already has and 
 
 ---
 
-# What's New in Version 2.0.0
+# What's New in Version 2.1.0
 
-Version 2.0.0 is a major update that expands HALP! from Home/Away presence analysis into a multi-zone location consensus system, which can now recognize departures from EVERY previously confirmed location (Zone) faster than the standard Home Assistant Person state (location) as explained below.
+Version 2.1.0 builds on HALP!'s multi-zone location consensus system by preventing slow fixed-location sources from temporarily pulling Vetted Location back to a Zone that GPS has already confirmed was left.
+
+## Geographic Snap-Back Protection
+
+When the optional **Speed up location transitions** feature confirms a GPS departure with a second matching GPS update, HALP! remembers that departed Zone at runtime.
+
+If a fixed BLE or router/WiFi source was already positively reporting that old Zone before the confirmed departure and simply continues reporting it afterward, HALP! can identify that as old "sticky" evidence.
+
+* If current GPS reports `not_home`, the sticky fixed source cannot pull Vetted Location back to the departed Zone.
+* If current GPS reports another named Zone, HALP! compares the actual Home Assistant Zone circles. The old fixed evidence is excluded only when the departed Zone and current GPS Zone do **not** overlap.
+* If the Zones overlap, normal voting continues because both Zone memberships may be geographically possible.
+* `unknown` or `unavailable` GPS does not exclude fixed-location evidence.
+* No learned timer or fixed delay is used.
+
+Fresh arrival evidence remains intentionally fast. If a fixed BLE/router source genuinely changes from `not_home` to positive presence for its configured Zone while GPS has not yet updated, HALP! treats that as new arrival evidence and can immediately prioritize that Zone. The temporary arrival priority ends when GPS next updates.
+
+Bug fix: HALP! also preserves Home Assistant Zone friendly names exactly in human-facing explanations. A Zone such as `Wendy's` therefore remains `Wendy's` instead of being changed to `Wendy'S`.
 
 ## Multi-Zone Location Support
 
@@ -55,7 +71,7 @@ The setting is enabled by default.
 
 ## Sensor Classification and Fixed-Location Configuration
 
-HALP! v2.0.0 expands sensor classification so HALP! knows both **what kind of location evidence a source provides** and, when appropriate, **where that source is physically fixed**.
+HALP! v2.0.0 introduced expanded sensor classification so HALP! knows both **what kind of location evidence a source provides** and, when appropriate, **where that source is physically fixed**.
 
 Each Person-assigned sensor can be classified as:
 

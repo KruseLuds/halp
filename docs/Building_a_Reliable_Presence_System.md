@@ -95,7 +95,7 @@ still nearby.
 
 ## HALP! multi-zone source rules
 
-HALP! v2.0.0 uses Home Assistant's zone vocabulary directly. The source
+HALP! v2.0.0 and later use Home Assistant's zone vocabulary directly. The source
 types have different responsibilities:
 
 -   **GPS:** no HALP! zone assignment. GPS already reports `home`,
@@ -123,6 +123,31 @@ apply to every zone. Users do not configure separate weights for Home,
 Work, School, or other zones.
 
 ------------------------------------------------------------------------
+
+
+## Geographic conflicts and sticky fixed sources
+
+HALP! v2.1.0 distinguishes a fixed source that genuinely detects a new
+arrival from one that simply remains stuck on its old positive state
+after GPS has confirmed departure.
+
+After the optional second matching GPS update confirms departure from a
+fixed source's Zone, HALP! can prevent that unchanged old fixed evidence
+from pulling Vetted Location back to the departed Zone.
+
+When GPS reports another named Zone, HALP! uses the actual Home Assistant
+Zone latitude, longitude, and radius values to determine whether the two
+Zone circles overlap. Non-overlapping Zones are geographically
+incompatible. Overlapping Zones continue normal voting.
+
+When GPS reports `not_home`, old fixed evidence for the confirmed
+departed Zone is also prevented from snapping HALP! back there.
+`unknown` and `unavailable` GPS do not create geographic exclusion.
+
+A fixed BLE/router source that actually changes from `not_home` to
+positive presence is different. That is fresh arrival evidence and can
+temporarily take precedence while GPS has not yet updated.
+
 
 # 2. Create or Review the Home Assistant Person
 

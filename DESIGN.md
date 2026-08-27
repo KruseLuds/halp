@@ -1,6 +1,6 @@
 # HALP! DESIGN DOCUMENT
 
-Version: **2.0.0 (Living Document)**
+Version: **2.1.0 (Living Document)**
 
 ## Purpose
 
@@ -83,7 +83,7 @@ confidence.
 ## Long-Term Goal
 
 HALP! should become the definitive diagnostics tool for Home Assistant
-presence reliability.
+location reliability, and possibly later, presence reliability.
 
 ## Optional Faster GPS Location Transition
 
@@ -109,6 +109,27 @@ The temporary priority state ends when ordinary weighted voting
 independently supports the same location or when a different location
 transition supersedes it. The feature never modifies the Home Assistant
 Person, GPS tracker, or zones.
+
+## Geographic snap-back protection after confirmed GPS departure
+
+Version 2.1.0 extends the optional second matching GPS transition rule with a runtime geographic protection model.
+
+When the second matching GPS update confirms that GPS has departed Zone A, HALP! remembers the departed Zone, the confirming GPS entity, and the confirmation time. This context is runtime-only and is not persisted across Home Assistant restarts or HALP! reloads.
+
+A fixed BLE/router source assigned to Zone A is considered old sticky evidence only when all of the following are true:
+
+1.  The source is still positively reporting Zone A.
+2.  Its current positive state began before the GPS-confirmed departure.
+3.  The same confirming GPS source still has a valid and sufficiently fresh location.
+4.  GPS is either `not_home`, or GPS is in another concrete Zone B that does not overlap Zone A.
+
+Home Assistant Zones are treated as circles using their current latitude, longitude, and radius attributes. Two named Zones that overlap are not considered mutually exclusive. If Zone geometry cannot be evaluated safely, HALP! keeps the fixed evidence rather than excluding it.
+
+`unknown` and `unavailable` GPS do not establish geographic exclusion.
+
+A real fixed-source transition from `not_home` to positive presence after the confirmed departure is new arrival evidence, not sticky evidence. If GPS has not updated yet, HALP! temporarily prioritizes that fresh fixed arrival. The temporary arrival priority ends on the next GPS update, after which the source remains ordinary positive evidence.
+
+This design preserves fast fixed-source arrival behavior while preventing a slow BLE/router source from resurrecting a previously departed, geographically incompatible Zone.
 
 ## GPS transition option availability and upgrade acknowledgement
 

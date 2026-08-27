@@ -1210,6 +1210,11 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
 
         if result.usable:
             status = display_location_state(result.normalized_state)
+        elif getattr(result, "geographic_snapback_suppressed", False):
+            status = (
+                f"geographically excluded "
+                f"{display_location_state(result.normalized_state)}"
+            )
         elif is_valid_location_state(result.normalized_state):
             status = f"stale {display_location_state(result.normalized_state)}"
         else:
@@ -1262,7 +1267,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             ]
         else:
             parts = [
-                f"{display_location_state(vetted_location).title()} with {confidence}% confidence.",
+                f"{display_location_state(vetted_location)} with {confidence}% confidence.",
                 f"{len(usable_results)} of {source_count} sources usable.",
                 f"Sources: {source_text}.",
             ]
@@ -1271,7 +1276,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             parts.append(
                 f"{len(conflicting_results)} source"
                 f"{'s' if len(conflicting_results) != 1 else ''} disagree "
-                f"with {display_location_state(vetted_location).title()}."
+                f"with {display_location_state(vetted_location)}."
             )
 
         if stale_results:
@@ -1539,6 +1544,11 @@ class HalpConflictDetailsSensor(HalpBaseSensor):
 
         if result.usable:
             status = display_location_state(result.normalized_state)
+        elif getattr(result, "geographic_snapback_suppressed", False):
+            status = (
+                f"geographically excluded "
+                f"{display_location_state(result.normalized_state)}"
+            )
         elif is_valid_location_state(result.normalized_state):
             status = f"stale {display_location_state(result.normalized_state)}"
         else:

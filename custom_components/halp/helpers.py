@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
 from homeassistant.components.person import DOMAIN as PERSON_DOMAIN
@@ -54,6 +55,9 @@ from .const import (
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
     RUNTIME_GPS_PRIORITY_LOCATION,
     RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER,
+    RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE,
+    RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION,
     ROUTER_ZONE_NONE_MOBILE,
 )
 
@@ -84,6 +88,10 @@ class SourceResult:
     gps_priority_confidence_floor: int = 0
     gps_priority_location: str | None = None
     fixed_zone_entity_id: str | None = None
+    geographic_snapback_suppressed: bool = False
+    geographic_snapback_reason: str | None = None
+    fixed_arrival_priority_active: bool = False
+    fixed_arrival_priority_location: str | None = None
 
 
 def resolve_person_entity_id(
@@ -228,6 +236,173 @@ def zone_location_state(hass: HomeAssistant, zone_entity_id: str | None) -> str 
     return zone_entity_id.split(".", 1)[1]
 
 
+def zone_entity_id_for_location(
+    hass: HomeAssistant,
+    location: str | None,
+) -> str | None:
+    """Return the active Home Assistant zone entity for a location state."""
+    if not isinstance(location, str) or not is_valid_location_state(location):
+        return None
+
+    if location == LOCATION_NOT_HOME:
+        return None
+
+    if location == LOCATION_HOME:
+        state = hass.states.get("zone.home")
+        if state is not None and not bool(state.attributes.get("passive", False)):
+            return "zone.home"
+        return None
+
+    folded = location.casefold()
+    for state in hass.states.async_all("zone"):
+        if bool(state.attributes.get("passive", False)):
+            continue
+
+        friendly_name = state.attributes.get("friendly_name")
+        object_id = state.entity_id.split(".", 1)[1] if "." in state.entity_id else state.entity_id
+        candidates = [object_id]
+        if isinstance(friendly_name, str):
+            candidates.append(friendly_name)
+
+        if any(folded == candidate.casefold() for candidate in candidates):
+            return state.entity_id
+
+    return None
+
+
+def zones_overlap(
+    hass: HomeAssistant,
+    zone_a_entity_id: str,
+    zone_b_entity_id: str,
+) -> bool:
+    """Return whether two Home Assistant circular zones overlap.
+
+    Home Assistant zones are circles described by latitude, longitude, and
+    radius. If either zone cannot be evaluated safely, return True so HALP!
+    does not suppress evidence based on uncertain geometry.
+    """
+    if zone_a_entity_id == zone_b_entity_id:
+        return True
+
+    zone_a = hass.states.get(zone_a_entity_id)
+    zone_b = hass.states.get(zone_b_entity_id)
+    if zone_a is None or zone_b is None:
+        return True
+
+    try:
+        lat_a = float(zone_a.attributes["latitude"])
+        lon_a = float(zone_a.attributes["longitude"])
+        radius_a = float(zone_a.attributes["radius"])
+        lat_b = float(zone_b.attributes["latitude"])
+        lon_b = float(zone_b.attributes["longitude"])
+        radius_b = float(zone_b.attributes["radius"])
+    except (KeyError, TypeError, ValueError):
+        return True
+
+    # Haversine distance between the zone centers, in meters.
+    earth_radius_m = 6371008.8
+    lat_a_rad = radians(lat_a)
+    lat_b_rad = radians(lat_b)
+    delta_lat = radians(lat_b - lat_a)
+    delta_lon = radians(lon_b - lon_a)
+
+    hav = (
+        sin(delta_lat / 2) ** 2
+        + cos(lat_a_rad) * cos(lat_b_rad) * sin(delta_lon / 2) ** 2
+    )
+    center_distance_m = 2 * earth_radius_m * asin(min(1.0, sqrt(hav)))
+
+    return center_distance_m <= (radius_a + radius_b)
+
+
+def _geographic_snapback_suppression_reason(
+    hass: HomeAssistant,
+    config: dict[str, Any],
+    entity_id: str,
+    fixed_zone_entity_id: str | None,
+) -> str | None:
+    """Return why old fixed-zone evidence should be excluded, if applicable.
+
+    Suppression only applies after the optional second-matching GPS rule has
+    confirmed a departure from the fixed source's zone. A fixed source whose
+    state actually changed after that confirmed departure is fresh arrival
+    evidence and is never suppressed by this rule.
+    """
+    if not fixed_zone_entity_id:
+        return None
+
+    if not bool(
+        config.get(
+            CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
+            DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+        )
+    ):
+        return None
+
+    contexts = config.get(RUNTIME_GPS_DEPARTED_ZONE_CONTEXTS, {})
+    if not isinstance(contexts, dict):
+        return None
+
+    context = contexts.get(fixed_zone_entity_id)
+    if not isinstance(context, dict):
+        return None
+
+    gps_entity_id = context.get("gps_entity_id")
+    confirmed_at = context.get("confirmed_at")
+    if not isinstance(gps_entity_id, str):
+        return None
+
+    try:
+        confirmed_at_ts = float(confirmed_at)
+    except (TypeError, ValueError):
+        return None
+
+    fixed_state = hass.states.get(entity_id)
+    if fixed_state is None:
+        return None
+
+    # A real fixed-source state change after the GPS-confirmed departure is new
+    # evidence, not the old sticky positive state that this rule is designed
+    # to block.
+    if fixed_state.last_changed.timestamp() > confirmed_at_ts:
+        return None
+
+    gps_state = hass.states.get(gps_entity_id)
+    if gps_state is None:
+        return None
+
+    gps_location = canonical_dynamic_location_state(hass, gps_state.state)
+    if not is_valid_location_state(gps_location):
+        return None
+
+    # Do not use very stale GPS evidence to geographically exclude a fixed
+    # source.
+    if freshness_factor(minutes_since_updated(hass, gps_entity_id)) <= 0:
+        return None
+
+    fixed_location = zone_location_state(hass, fixed_zone_entity_id)
+    if fixed_location is None or gps_location == fixed_location:
+        return None
+
+    if gps_location == LOCATION_NOT_HOME:
+        return (
+            f"GPS {gps_entity_id} confirmed departure from "
+            f"{fixed_location} and still reports not_home"
+        )
+
+    gps_zone_entity_id = zone_entity_id_for_location(hass, gps_location)
+    if gps_zone_entity_id is None:
+        return None
+
+    if zones_overlap(hass, fixed_zone_entity_id, gps_zone_entity_id):
+        return None
+
+    return (
+        f"GPS {gps_entity_id} confirmed departure from {fixed_location}; "
+        f"{fixed_location} and {gps_location} do not overlap"
+    )
+
+
 def canonical_dynamic_location_state(hass: HomeAssistant, raw_state: str) -> str:
     """Canonicalize a dynamic tracker state against current active HA zones."""
     normalized = normalize_location_state(raw_state)
@@ -341,6 +516,18 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
     if not isinstance(priority_location, str) or not is_valid_location_state(priority_location):
         priority_location = None
 
+    fixed_arrival_priority_active = bool(
+        config.get(RUNTIME_FIXED_ARRIVAL_PRIORITY_ACTIVE, False)
+    )
+    fixed_arrival_priority_location = config.get(
+        RUNTIME_FIXED_ARRIVAL_PRIORITY_LOCATION
+    )
+    if (
+        not isinstance(fixed_arrival_priority_location, str)
+        or not is_valid_location_state(fixed_arrival_priority_location)
+    ):
+        fixed_arrival_priority_location = None
+
     for source_type, entity_id in iter_configured_sources(config):
         raw_state = get_state(hass, entity_id)
         raw_normalized = canonical_dynamic_location_state(hass, raw_state)
@@ -349,6 +536,8 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
         factor = freshness_factor(updated_minutes)
         weight = source_weight(config, source_type)
         fixed_zone_entity_id: str | None = None
+        geographic_snapback_suppressed = False
+        geographic_snapback_reason: str | None = None
         usable = False
         normalized = raw_normalized
 
@@ -384,6 +573,21 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
                 else:
                     normalized = raw_normalized
 
+        if (
+            source_type in (SOURCE_TYPE_BLE, SOURCE_TYPE_ROUTER)
+            and usable
+            and fixed_zone_entity_id is not None
+        ):
+            geographic_snapback_reason = _geographic_snapback_suppression_reason(
+                hass,
+                config,
+                entity_id,
+                fixed_zone_entity_id,
+            )
+            if geographic_snapback_reason is not None:
+                usable = False
+                geographic_snapback_suppressed = True
+
         results.append(
             SourceResult(
                 source_type=source_type,
@@ -406,6 +610,14 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
                 ),
                 gps_priority_location=priority_location if priority_active else None,
                 fixed_zone_entity_id=fixed_zone_entity_id,
+                geographic_snapback_suppressed=geographic_snapback_suppressed,
+                geographic_snapback_reason=geographic_snapback_reason,
+                fixed_arrival_priority_active=fixed_arrival_priority_active,
+                fixed_arrival_priority_location=(
+                    fixed_arrival_priority_location
+                    if fixed_arrival_priority_active
+                    else None
+                ),
             )
         )
 
@@ -414,6 +626,13 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
 
 def calculate_vetted_location(results: list[SourceResult]) -> str:
     """Calculate HALP!'s best current location across any number of zones."""
+    for result in results:
+        if (
+            result.fixed_arrival_priority_active
+            and result.fixed_arrival_priority_location
+        ):
+            return result.fixed_arrival_priority_location
+
     for result in results:
         if result.prioritize_second_gps_not_home_active and result.gps_priority_location:
             return result.gps_priority_location
@@ -650,4 +869,8 @@ def source_result_to_attribute(result: SourceResult) -> dict[str, Any]:
         ),
         "gps_priority_location": result.gps_priority_location,
         "fixed_zone_entity_id": result.fixed_zone_entity_id,
+        "geographic_snapback_suppressed": result.geographic_snapback_suppressed,
+        "geographic_snapback_reason": result.geographic_snapback_reason,
+        "fixed_arrival_priority_active": result.fixed_arrival_priority_active,
+        "fixed_arrival_priority_location": result.fixed_arrival_priority_location,
     }

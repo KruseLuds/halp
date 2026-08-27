@@ -45,7 +45,7 @@
       },
       "tuning": {
         "title": "Tune HALP! reliability scoring",
-        "description": "Adjust HALP!'s GPS location-transition speedup option, reliability threshold, and source weights. The same weights and thresholds apply in every zone.",
+        "description": "Adjust HALP!'s GPS location-transition speedup option, reliability threshold, and source weights. When GPS confirms departure, the same option also prevents old fixed-location evidence from snapping Vetted Location back to a geographically incompatible departed zone. Fresh fixed-source arrivals remain valid. The same weights and thresholds apply in every zone.",
         "data": {
           "reliable_threshold": "Reliability threshold % (0-100):",
           "gps_weight": "GPS source weight (0-200):",
