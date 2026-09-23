@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
+    async_call_later,
     async_track_state_change_event,
     async_track_time_interval,
 )
@@ -20,6 +21,7 @@ from .const import (
     CONF_BLE_ZONES,
     CONF_GPS_ENTITIES,
     CONF_IGNORED_ENTITIES,
+    CONF_IDLE_REFRESH_MINUTES,
     CONF_KNOWN_ZONES,
     CONF_PERSON_ENTITY,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
@@ -27,6 +29,7 @@ from .const import (
     CONF_ROUTER_ENTITIES,
     CONF_ROUTER_ZONES,
     DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
+    DEFAULT_IDLE_REFRESH_MINUTES,
     GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR,
     DOMAIN,
     PLATFORMS,
@@ -43,6 +46,9 @@ from .const import (
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
     RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
     RUNTIME_GPS_PRIORITY_LOCATION,
+    RUNTIME_HISTORY_REFRESH_CALLBACKS,
+    RUNTIME_IDLE_REFRESH_CANCEL,
+    RUNTIME_SENSOR_REFRESH_CALLBACKS,
     ROUTER_ZONE_NONE_MOBILE,
 )
 from .helpers import (
@@ -109,6 +115,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     config[RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY] = None
     config[RUNTIME_GPS_PRIORITY_LOCATION] = None
     config[RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER] = 0
+    config[RUNTIME_SENSOR_REFRESH_CALLBACKS] = set()
+    config[RUNTIME_HISTORY_REFRESH_CALLBACKS] = set()
+    config[RUNTIME_IDLE_REFRESH_CANCEL] = None
 
     resolved_person_entity = resolve_person_entity_id(hass, entry)
 
@@ -212,27 +221,87 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             results=results,
         )
 
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            record_history_sample,
-            HISTORY_SAMPLE_INTERVAL,
+        await _async_refresh_registered_entities(
+            current_config,
+            RUNTIME_HISTORY_REFRESH_CALLBACKS,
         )
-    )
+
+    # History sampling is idle-based, not an independent periodic poll.
+    # Any relevant source event restarts this per-person timer, so a history
+    # sample is written only after the person has had no source activity for
+    # the full history interval.
+    history_timer_key = "_halp_history_sample_cancel"
+    history_generation_key = "_halp_history_sample_generation"
+    config[history_generation_key] = 0
+
+    def _cancel_history_sample() -> None:
+        cancel = config.get(history_timer_key)
+        if callable(cancel):
+            cancel()
+        config[history_timer_key] = None
+
+    def _schedule_history_sample() -> None:
+        # Advance a generation on every reset.  Cancellation normally removes the
+        # old callback, but the generation guard also makes an already-dispatched
+        # callback harmless if a source event arrives at the timer boundary.
+        _cancel_history_sample()
+        generation = int(config.get(history_generation_key, 0)) + 1
+        config[history_generation_key] = generation
+
+        async def _async_idle_history_sample(now) -> None:
+            current_config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+            if not isinstance(current_config, dict):
+                return
+
+            if current_config.get(history_generation_key) != generation:
+                return
+
+            current_config[history_timer_key] = None
+            await record_history_sample(now)
+
+            # If the entry remains quiet, take another sample after another
+            # complete history interval. Any source event will invalidate this
+            # generation and restart the full interval immediately.
+            _schedule_history_sample()
+
+        config[history_timer_key] = async_call_later(
+            hass,
+            HISTORY_SAMPLE_INTERVAL,
+            _async_idle_history_sample,
+        )
+
+    _schedule_history_sample()
+    entry.async_on_unload(_cancel_history_sample)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Listen to every scored tracker so the GPS-specific rule can observe a
-    # second update whose location state remains unchanged.
+    # Listen to every scored tracker. The existing transition handler preserves
+    # HALP!'s GPS/fixed-source behavior, then the same event drives an immediate
+    # refresh of the current-state HALP! sensors and resets the idle timer.
     tracked_entities = _configured_location_trackers(config)
     if tracked_entities:
         async def _async_location_source_event(event: Event) -> None:
-            """Forward tracker state-change events to the async HALP handler."""
+            """Process one source event and refresh HALP! immediately."""
+            # Reset history at the instant source activity is observed, before
+            # awaiting any processing. Otherwise a history timer due a second
+            # later can fire while this event is still being handled.
+            _schedule_history_sample()
+
             await _async_handle_location_source_event(
                 hass,
                 entry,
                 event,
             )
+
+            current_config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+            if not isinstance(current_config, dict):
+                return
+
+            await _async_refresh_registered_entities(
+                current_config,
+                RUNTIME_SENSOR_REFRESH_CALLBACKS,
+            )
+            _schedule_idle_refresh(hass, entry, current_config)
 
         entry.async_on_unload(
             async_track_state_change_event(
@@ -242,7 +311,77 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         )
 
+    # Start the one-shot idle timer even before the first source event so a
+    # completely quiet tracker set still gets freshness reevaluation.
+    _schedule_idle_refresh(hass, entry, config)
+    entry.async_on_unload(lambda: _cancel_idle_refresh(config))
+
     return True
+
+
+async def _async_refresh_registered_entities(
+    config: dict[str, Any],
+    registry_key: str,
+) -> None:
+    """Refresh entities registered for one HALP! refresh group."""
+    callbacks = config.get(registry_key)
+    if not isinstance(callbacks, set):
+        return
+
+    for refresh_callback in list(callbacks):
+        await refresh_callback()
+
+
+def _cancel_idle_refresh(config: dict[str, Any]) -> None:
+    """Cancel the active idle refresh timer for one HALP! entry."""
+    cancel = config.get(RUNTIME_IDLE_REFRESH_CANCEL)
+    if callable(cancel):
+        cancel()
+    config[RUNTIME_IDLE_REFRESH_CANCEL] = None
+
+
+def _schedule_idle_refresh(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    config: dict[str, Any],
+) -> None:
+    """Reset the per-entry idle freshness reevaluation timer."""
+    cancel = config.get(RUNTIME_IDLE_REFRESH_CANCEL)
+    if callable(cancel):
+        cancel()
+
+    try:
+        idle_minutes = int(
+            config.get(CONF_IDLE_REFRESH_MINUTES, DEFAULT_IDLE_REFRESH_MINUTES)
+        )
+    except (TypeError, ValueError):
+        idle_minutes = DEFAULT_IDLE_REFRESH_MINUTES
+
+    idle_minutes = max(1, idle_minutes)
+
+    async def _async_idle_refresh(now) -> None:
+        current_config = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if not isinstance(current_config, dict):
+            return
+
+        current_config[RUNTIME_IDLE_REFRESH_CANCEL] = None
+
+        if not current_config.get("person_missing", False):
+            await _async_refresh_registered_entities(
+                current_config,
+                RUNTIME_SENSOR_REFRESH_CALLBACKS,
+            )
+
+        # Stay quiet while sources are active, but continue reevaluating
+        # freshness at the configured cadence for as long as the entry is idle.
+        _schedule_idle_refresh(hass, entry, current_config)
+
+    cancel = async_call_later(
+        hass,
+        timedelta(minutes=idle_minutes),
+        _async_idle_refresh,
+    )
+    config[RUNTIME_IDLE_REFRESH_CANCEL] = cancel
 
 
 async def _async_handle_location_source_event(

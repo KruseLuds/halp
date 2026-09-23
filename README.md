@@ -18,6 +18,40 @@ Instead, HALP! analyzes the location information Home Assistant already has and 
 
 ---
 
+# What's New in Version 2.1.1
+
+Version 2.1.1 is a maintenance and performance release focused on dramatically reducing unnecessary HALP! state publications and Home Assistant Recorder activity without reducing location functionality or diagnostic accuracy.
+
+## Event-Driven Publication and Recorder Optimization
+
+HALP! continues to evaluate relevant source events immediately, but its sensors now publish a new Home Assistant state only when the displayed state or meaningful attributes actually change.
+
+* Repeated source updates that do not change HALP!'s effective output are suppressed.
+* Source timestamp refreshes such as `last_updated` and `last_changed` no longer create new HALP! Recorder rows by themselves.
+* Vetted Location, Source Summary, and Source Details do not republish solely because a source freshness factor stepped down while their meaningful result remained unchanged.
+* Tracker Reliability Table continues to publish meaningful freshness changes because source freshness is one of that entity's primary diagnostics.
+* Real location transitions, named-Zone transitions, source usability changes, Confidence and Consensus changes, conflicts, and other meaningful diagnostic changes continue to publish normally.
+
+This keeps HALP! responsive to location changes while substantially reducing background Recorder activity when people remain stationary.
+
+## Clearer Diagnostic Logging
+
+When HALP! publishes an entity whose displayed state is unchanged because meaningful attributes changed, the HALP! INFO log now marks that publication with:
+
+`(attributes changed)`
+
+This makes it easier to distinguish a real displayed-state transition from a diagnostic attribute update while troubleshooting.
+
+## History Summary Cleanup
+
+The user-facing History Summary sensor has been removed.
+
+Once HALP!'s rolling history buffer was full, the sensor normally remained at a fixed state such as `288 samples`. The underlying history continued to roll, but the visible sample count itself provided little useful operational information and could continue generating Recorder activity as its attributes changed.
+
+HALP!'s underlying rolling history and history-derived calculations remain in place. This change removes only the redundant user-facing sample-count sensor.
+
+---
+
 # What's New in Version 2.1.0
 
 Version 2.1.0 builds on HALP!'s multi-zone location consensus system by preventing slow fixed-location sources from temporarily pulling Vetted Location back to a Zone that GPS has already confirmed was left.

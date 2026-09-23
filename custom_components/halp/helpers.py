@@ -83,6 +83,8 @@ class SourceResult:
     freshness_factor: float
     last_updated_minutes: float
     last_changed_minutes: float
+    last_updated: str | None
+    last_changed: str | None
     usable: bool
     prioritize_second_gps_not_home_active: bool = False
     gps_priority_confidence_floor: int = 0
@@ -533,6 +535,13 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
         raw_normalized = canonical_dynamic_location_state(hass, raw_state)
         updated_minutes = minutes_since_updated(hass, entity_id)
         changed_minutes = minutes_since_changed(hass, entity_id)
+        source_state = hass.states.get(entity_id)
+        last_updated = (
+            source_state.last_updated.isoformat() if source_state is not None else None
+        )
+        last_changed = (
+            source_state.last_changed.isoformat() if source_state is not None else None
+        )
         factor = freshness_factor(updated_minutes)
         weight = source_weight(config, source_type)
         fixed_zone_entity_id: str | None = None
@@ -599,6 +608,8 @@ def analyze_sources(hass: HomeAssistant, config: dict[str, Any]) -> list[SourceR
                 freshness_factor=factor,
                 last_updated_minutes=updated_minutes,
                 last_changed_minutes=changed_minutes,
+                last_updated=last_updated,
+                last_changed=last_changed,
                 usable=usable,
                 prioritize_second_gps_not_home_active=(
                     bool(config.get(CONF_PRIORITIZE_SECOND_GPS_NOT_HOME, DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME))
@@ -856,10 +867,8 @@ def source_result_to_attribute(result: SourceResult) -> dict[str, Any]:
         "normalized_state": result.normalized_state,
         "weight": result.weight,
         "freshness_factor": result.freshness_factor,
-        "updated_minutes": round(result.last_updated_minutes, 2),
-        "changed_minutes": round(result.last_changed_minutes, 2),
-        "updated": format_age(result.last_updated_minutes),
-        "unchanged": format_age(result.last_changed_minutes),
+        "last_updated": result.last_updated,
+        "last_changed": result.last_changed,
         "usable": result.usable,
         "gps_fast_transition_active": (
             result.prioritize_second_gps_not_home_active

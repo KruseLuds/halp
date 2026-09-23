@@ -82,6 +82,18 @@
 -   Exact preservation of Home Assistant Zone friendly names in
     human-facing HALP! explanations (bug fix)
 
+### Version 2.1.1 Maintenance Update
+
+-   Event-driven HALP! entity publication
+-   Semantic publication deduplication to reduce unnecessary Recorder
+    activity
+-   Timestamp-only source refreshes no longer force HALP! state
+    publications
+-   Clear `(attributes changed)` INFO-log annotation for same-state
+    diagnostic publications
+-   Removal of the redundant user-facing History Summary sample-count
+    sensor while retaining HALP!'s underlying rolling history
+
 ------------------------------------------------------------------------
 
 ## Version 2.2

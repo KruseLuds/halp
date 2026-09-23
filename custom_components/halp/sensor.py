@@ -22,6 +22,8 @@ Everything is driven by config entry data.
 from __future__ import annotations
 
 from datetime import datetime
+import logging
+import re
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
@@ -48,8 +50,12 @@ from .const import (
     RUNTIME_GPS_NOT_HOME_PRIORITY_ACTIVE,
     RUNTIME_GPS_NOT_HOME_TRIGGER_ENTITY,
     RUNTIME_GPS_PRIORITY_LOCATION,
+    RUNTIME_HISTORY_REFRESH_CALLBACKS,
+    RUNTIME_SENSOR_REFRESH_CALLBACKS,
     NAME,
 )
+_LOGGER = logging.getLogger(__name__)
+
 from .helpers import (
     analyze_sources,
     calculate_base_confidence,
@@ -57,7 +63,6 @@ from .helpers import (
     calculate_consensus_score,
     calculate_source_health,
     calculate_vetted_location,
-    format_age,
     get_state,
     is_valid_location_state,
     source_result_to_attribute,
@@ -83,7 +88,6 @@ async def async_setup_entry(
             HalpSourceHealthSensor(hass, entry, config),
             HalpSourceDetailsSensor(hass, entry, config),
             HalpTrackerReliabilityTableSensor(hass, entry, config),
-            HalpHistorySummarySensor(hass, entry, config),
             HalpConfidenceTrendSensor(hass, entry, config),
             HalpConsensusTrendSensor(hass, entry, config),
             HalpLocationExplanationSensor(hass, entry, config),
@@ -231,7 +235,9 @@ class HalpBaseSensor(SensorEntity):
     - missing Person handling
     """
 
-    _attr_should_poll = True
+    _attr_should_poll = False
+
+    _refresh_registry_key = RUNTIME_SENSOR_REFRESH_CALLBACKS
 
     def __init__(
         self,
@@ -248,6 +254,12 @@ class HalpBaseSensor(SensorEntity):
 
         self._attr_icon = icon
         self._attr_name = f"{NAME} {entry.title} {suffix}"
+
+        # Snapshot of the last HA-visible HALP! payload. Source events may arrive
+        # frequently even when HALP!'s published result is unchanged. Keeping this
+        # fingerprint lets HALP! evaluate every event immediately without creating
+        # a Recorder row unless this entity's state or meaningful attributes change.
+        self._last_published_fingerprint: Any = None
 
         safe_suffix = suffix.lower().replace(" ", "_")
         self._attr_unique_id = f"{DOMAIN}_{entry.entry_id}_{safe_suffix}"
@@ -275,6 +287,194 @@ class HalpBaseSensor(SensorEntity):
             "halp_status": "Configured Person entity could not be found.",
             "person_entity": self.config.get(CONF_PERSON_ENTITY),
         }
+
+    async def async_added_to_hass(self) -> None:
+        """Register this entity for event-driven HALP! refreshes."""
+        await super().async_added_to_hass()
+
+        # async_add_entities(..., update_before_add=True) has already established
+        # the entity's initial HA state. Seed the comparison snapshot from that
+        # same public payload so the first unchanged source event is not written
+        # again merely because HALP! has just started.
+        self._last_published_fingerprint = self._halp_publication_fingerprint()
+
+        callbacks = self.config.setdefault(self._refresh_registry_key, set())
+        callbacks.add(self._async_refresh_from_halp)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister this entity from event-driven HALP! refreshes."""
+        callbacks = self.config.get(self._refresh_registry_key)
+        if isinstance(callbacks, set):
+            callbacks.discard(self._async_refresh_from_halp)
+        await super().async_will_remove_from_hass()
+
+    @staticmethod
+    def _freeze_publication_value(value: Any) -> Any:
+        """Return a deterministic, hashable representation of HA-visible data."""
+        if isinstance(value, dict):
+            return tuple(
+                sorted(
+                    (str(key), HalpBaseSensor._freeze_publication_value(item))
+                    for key, item in value.items()
+                )
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(
+                HalpBaseSensor._freeze_publication_value(item) for item in value
+            )
+        if isinstance(value, set):
+            return tuple(
+                sorted(
+                    (HalpBaseSensor._freeze_publication_value(item) for item in value),
+                    key=repr,
+                )
+            )
+        return value
+
+    @staticmethod
+    def _semantic_publication_value(value: Any) -> Any:
+        """Return HA-visible data with timestamp-only churn removed.
+
+        Source integrations can refresh their timestamps even when the location
+        evidence itself has not changed. Those bookkeeping timestamps are useful
+        diagnostics, but they must not by themselves cause HALP! to publish a new
+        state and create another Recorder row.
+
+        Meaningful values such as source state, usability, freshness factor,
+        confidence, consensus, conflicts, and vetted location remain part of the
+        fingerprint.
+        """
+        volatile_keys = {
+            "last_updated",
+            "last_changed",
+            "updated",
+            "unchanged",
+        }
+
+        if isinstance(value, dict):
+            return {
+                key: HalpBaseSensor._semantic_publication_value(item)
+                for key, item in value.items()
+                if str(key) not in volatile_keys
+            }
+        if isinstance(value, list):
+            return [
+                HalpBaseSensor._semantic_publication_value(item) for item in value
+            ]
+        if isinstance(value, tuple):
+            return tuple(
+                HalpBaseSensor._semantic_publication_value(item) for item in value
+            )
+        if isinstance(value, set):
+            return {
+                HalpBaseSensor._semantic_publication_value(item) for item in value
+            }
+        if isinstance(value, str):
+            # Location Explanation intentionally includes source timestamps for
+            # diagnostics. A source may refresh one of those timestamps without
+            # changing any location evidence. Normalize only timestamps that are
+            # explicitly introduced by ``last updated`` or ``last changed`` so
+            # timestamp-only prose churn cannot defeat publication deduplication.
+            return re.sub(
+                r"(last (?:updated|changed) )"
+                r"\d{4}-\d{2}-\d{2}T[0-9:.+-]+Z?",
+                r"\1<timestamp>",
+                value,
+                flags=re.IGNORECASE,
+            )
+        return value
+
+    @staticmethod
+    def _drop_publication_keys(value: Any, ignored_keys: set[str]) -> Any:
+        """Return nested data with entity-specific diagnostic keys removed."""
+        if isinstance(value, dict):
+            return {
+                key: HalpBaseSensor._drop_publication_keys(item, ignored_keys)
+                for key, item in value.items()
+                if str(key) not in ignored_keys
+            }
+        if isinstance(value, list):
+            return [
+                HalpBaseSensor._drop_publication_keys(item, ignored_keys)
+                for item in value
+            ]
+        if isinstance(value, tuple):
+            return tuple(
+                HalpBaseSensor._drop_publication_keys(item, ignored_keys)
+                for item in value
+            )
+        if isinstance(value, set):
+            return {
+                HalpBaseSensor._drop_publication_keys(item, ignored_keys)
+                for item in value
+            }
+        return value
+
+    def _publication_attributes_for_fingerprint(self) -> Any:
+        """Return attributes that are meaningful for this entity's publication.
+
+        Vetted Location, Source Summary, and Source Details all expose source
+        diagnostics, but a freshness-factor step alone does not change what
+        those entities represent. Tracker Reliability Table intentionally keeps
+        freshness factor/rating in its fingerprint because freshness is one of
+        that entity's primary diagnostics.
+        """
+        attributes = self._semantic_publication_value(self.extra_state_attributes)
+
+        if self.__class__.__name__ in {
+            "HalpVettedLocationSensor",
+            "HalpSourceSummarySensor",
+            "HalpSourceDetailsSensor",
+        }:
+            attributes = self._drop_publication_keys(
+                attributes,
+                {"freshness_factor", "freshness_rating"},
+            )
+
+        return attributes
+
+    def _halp_publication_fingerprint(self) -> Any:
+        """Snapshot state and semantically meaningful attributes exposed to HA."""
+        return (
+            self.available,
+            self._freeze_publication_value(self.native_value),
+            self._freeze_publication_value(
+                self._publication_attributes_for_fingerprint()
+            ),
+        )
+
+    async def _async_refresh_from_halp(self) -> None:
+        """Evaluate immediately, but publish only an HA-visible change."""
+        async_update = getattr(self, "async_update", None)
+        if callable(async_update):
+            await async_update()
+
+        fingerprint = self._halp_publication_fingerprint()
+        previous_fingerprint = self._last_published_fingerprint
+        if fingerprint == previous_fingerprint:
+            return
+
+        # The publication fingerprint is (availability, native value, attributes).
+        # Once an entity has published, any later publication with the same
+        # displayed state is necessarily an attributes-only publication because
+        # an identical full fingerprint was already suppressed above. Keep this
+        # annotation strictly in the Core log; the HA state/Recorder payload is
+        # unchanged.
+        attributes_only_change = (
+            previous_fingerprint is not None
+            and fingerprint[1] == previous_fingerprint[1]
+        )
+
+        log_suffix = " (attributes changed)" if attributes_only_change else ""
+        _LOGGER.info(
+            "%s: %s%s",
+            self.entity_id or self.name,
+            self.native_value,
+            log_suffix,
+        )
+
+        self._last_published_fingerprint = fingerprint
+        self.async_write_ha_state()
 
 
 class HalpVettedLocationSensor(HalpBaseSensor):
@@ -757,10 +957,8 @@ class HalpTrackerReliabilityTableSensor(HalpBaseSensor):
                     "weight": result.weight,
                     "freshness_rating": freshness_rating,
                     "freshness_factor": result.freshness_factor,
-                    "updated": format_age(result.last_updated_minutes),
-                    "unchanged": format_age(result.last_changed_minutes),
-                    "updated_minutes": round(result.last_updated_minutes, 2),
-                    "changed_minutes": round(result.last_changed_minutes, 2),
+                    "last_updated": result.last_updated,
+                    "last_changed": result.last_changed,
                     "usable": result.usable,
                     "agrees_with_vetted_location": agrees_with_vetted_location,
                     "conflicts_with_vetted_location": conflicts_with_vetted_location,
@@ -785,6 +983,8 @@ class HalpTrackerReliabilityTableSensor(HalpBaseSensor):
 
 
 class HalpHistorySummarySensor(HalpBaseSensor):
+    _refresh_registry_key = RUNTIME_HISTORY_REFRESH_CALLBACKS
+
     """Sensor summarizing stored HALP! history samples.
 
     This sensor is mainly for verifying that history recording is working.
@@ -993,6 +1193,8 @@ class HalpHistorySummarySensor(HalpBaseSensor):
         }
 
 class HalpDailyTrendSensor(HalpBaseSensor):
+    _refresh_registry_key = RUNTIME_HISTORY_REFRESH_CALLBACKS
+
     """Base class for daily summary trend sensors."""
 
     trend_key: str
@@ -1341,9 +1543,8 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
             for result in usable_results:
                 lines.append(
                     f"{result.source_type_name} source {result.entity_id} reports "
-                    f"{display_location_state(result.normalized_state)}, updated "
-                    f"{format_age(result.last_updated_minutes)} ago, unchanged for "
-                    f"{format_age(result.last_changed_minutes)}."
+                    f"{display_location_state(result.normalized_state)}, last updated "
+                    f"{result.last_updated}, last changed {result.last_changed}."
                 )
 
         if conflicting_results:
@@ -1363,7 +1564,7 @@ class HalpLocationExplanationSensor(HalpBaseSensor):
                 lines.append(
                     f"{result.source_type_name} source {result.entity_id} reports "
                     f"{display_location_state(result.normalized_state)}, but last updated "
-                    f"{format_age(result.last_updated_minutes)} ago."
+                    f"{result.last_updated}."
                 )
 
         if missing_results:
@@ -1613,8 +1814,8 @@ class HalpConflictDetailsSensor(HalpBaseSensor):
                 "normalized_state": result.normalized_state,
                 "usable": result.usable,
                 "conflicts": is_conflict,
-                "updated": format_age(result.last_updated_minutes),
-                "unchanged": format_age(result.last_changed_minutes),
+                "last_updated": result.last_updated,
+                "last_changed": result.last_changed,
             }
 
             all_sources.append(source_details)

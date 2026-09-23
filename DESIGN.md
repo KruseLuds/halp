@@ -1,6 +1,6 @@
 # HALP! DESIGN DOCUMENT
 
-Version: **2.1.0 (Living Document)**
+Version: **2.1.1 (Living Document)**
 
 ## Purpose
 
@@ -79,6 +79,16 @@ Supporting evidence may include:
 
 These values primarily explain confidence rather than determine
 confidence.
+
+## Event-Driven Entity Publication
+
+HALP! evaluates relevant source events immediately, but a HALP! entity is published to Home Assistant only when its displayed state or semantically meaningful attributes change.
+
+Timestamp-only source bookkeeping such as `last_updated` and `last_changed` is diagnostic information and does not by itself justify a new HALP! state publication. Entity-specific publication rules may also ignore diagnostic freshness detail when freshness does not change what that entity represents. Tracker Reliability Table retains meaningful freshness changes because freshness is a primary purpose of that entity.
+
+This publication deduplication affects only what HALP! republishes to Home Assistant and Recorder. It does not disable source evaluation, change location voting, or alter the underlying location, Confidence, Consensus, Source Health, or history calculations.
+
+The user-facing History Summary sample-count sensor is not exposed because a full rolling buffer produces a fixed count while its contents continue to change. The underlying rolling history remains available to HALP!'s history-derived calculations.
 
 ## Long-Term Goal
 

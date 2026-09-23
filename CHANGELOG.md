@@ -5,6 +5,36 @@ All notable changes to HALP! will be documented in this file.
 This project follows Semantic Versioning (SemVer).
 
 
+# Version 2.1.1
+
+**Release Date:**
+September 23, 2026
+
+## Changed
+
+- Reworked HALP! sensor publication to be event-driven instead of continuously republishing ordinary sensor state.
+- Added semantic publication deduplication so source events are still evaluated immediately, but HALP! writes a new Home Assistant state only when the entity's displayed state or meaningful attributes actually change.
+- Timestamp-only source refreshes no longer create new HALP! Recorder rows by themselves.
+- Freshness-only changes are ignored for Vetted Location, Source Summary, and Source Details publication decisions while remaining available to HALP!'s calculations and diagnostics.
+- Tracker Reliability Table continues to publish meaningful freshness-factor or freshness-rating changes because freshness is a primary purpose of that diagnostic entity.
+- Repeated HALP! INFO log publications with an unchanged displayed state are now explicitly marked `(attributes changed)` so diagnostic activity is easier to distinguish from a real state transition.
+- Removed the user-facing History Summary sensor. Its fixed rolling-buffer count eventually reaches and stays at the predetermined `288 samples` (= 12 samples per hour x 24 hours) while the underlying history continued to roll, so the displayed state did not provide useful operational information. HALP!'s underlying history collection and history-derived calculations remain in place.
+
+## Fixed
+
+- Greatly reduced unnecessary Home Assistant Recorder activity caused by repeated HALP! publications when the effective state and meaningful attributes had not changed.
+- Prevented source `last_updated` / `last_changed` timestamp churn from defeating publication deduplication.
+- Preserved real location transitions, named-zone transitions, source-availability changes, confidence/consensus changes, and meaningful diagnostic changes while suppressing duplicate publications.
+
+## Compatibility
+
+- HALP!'s location calculations, source weighting, freshness evaluation, Confidence, Consensus, Source Health, and multi-zone behavior are unchanged by the publication optimization.
+- Existing Vetted Location states remain Home Assistant-compatible: `home`, `not_home`, named active Zones, and `unknown`.
+- The History Summary entity is removed, but HALP!'s internal rolling history and history-derived functionality continue to operate.
+- No Home Assistant Person, device tracker, Zone, or automation is modified by HALP!.
+
+------------------------------------------------------------------------
+
 # Version 2.1.0
 
 **Release Date:**

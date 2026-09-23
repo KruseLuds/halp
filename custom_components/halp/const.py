@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "halp"
 NAME = "HALP!"
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 
 PLATFORMS = ["sensor", "binary_sensor", "switch"]
 
@@ -34,6 +34,7 @@ CONF_RELIABLE_THRESHOLD = "reliable_threshold"
 CONF_GPS_WEIGHT = "gps_weight"
 CONF_BLE_WEIGHT = "ble_weight"
 CONF_ROUTER_WEIGHT = "router_weight"
+CONF_IDLE_REFRESH_MINUTES = "idle_refresh_minutes"
 
 # Keep the stored key names from v1.0.4 for backward compatibility. Since v2.0.0
 # the behavior is generalized from home -> not_home to any confirmed GPS
@@ -64,6 +65,7 @@ DEFAULT_RELIABLE_THRESHOLD = 70
 DEFAULT_GPS_WEIGHT = 100
 DEFAULT_BLE_WEIGHT = 70
 DEFAULT_ROUTER_WEIGHT = 55
+DEFAULT_IDLE_REFRESH_MINUTES = 5
 
 DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME = True
 GPS_NOT_HOME_PRIORITY_CONFIDENCE_FLOOR = 80
@@ -87,6 +89,9 @@ RUNTIME_GPS_NOT_HOME_CONFIDENCE_HIGH_WATER = (
 # Legacy runtime key retained only for compatibility with any in-memory code
 # during a reload. v2.1.0 does not use it as the primary candidate store.
 RUNTIME_GPS_NOT_HOME_ARMED = "_gps_not_home_armed"
+RUNTIME_SENSOR_REFRESH_CALLBACKS = "_sensor_refresh_callbacks"
+RUNTIME_HISTORY_REFRESH_CALLBACKS = "_history_refresh_callbacks"
+RUNTIME_IDLE_REFRESH_CANCEL = "_idle_refresh_cancel"
 
 FRESHNESS_EXCELLENT_MINUTES = 15
 FRESHNESS_GOOD_MINUTES = 60

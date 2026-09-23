@@ -353,7 +353,34 @@ HALP! recalculates as trackers update and age:
 -   the fast GPS confidence floor remains non-decreasing until ordinary
     weighted voting independently supports the same target.
 
-## 10. Related source files
+## 10. Entity publication and Recorder behavior
+
+HALP! evaluates relevant source events and recalculates its results as
+needed, but it does not publish a new Home Assistant sensor state merely
+because a source timestamp changed.
+
+A HALP! entity is published when its displayed state or semantically
+meaningful attributes change. This prevents source `last_updated` and
+`last_changed` timestamp churn from creating unnecessary Home Assistant
+Recorder rows while preserving real location transitions, named-zone
+transitions, source usability changes, Confidence and Consensus changes,
+and meaningful diagnostic changes.
+
+Some diagnostic entities intentionally treat freshness as meaningful
+information. For example, Tracker Reliability Table can publish when its
+freshness-related diagnostics change even if its displayed rating remains
+the same.
+
+When HALP! logs a publication whose displayed state is unchanged but
+meaningful attributes changed, the INFO log marks it with
+`(attributes changed)`.
+
+The user-facing History Summary sample-count sensor is not exposed. Once
+the rolling history buffer is full, its sample count remains constant even
+though the samples themselves continue to roll. HALP!'s underlying history
+and history-derived calculations continue to operate.
+
+## 11. Related source files
 
 The principal implementation is located in:
 

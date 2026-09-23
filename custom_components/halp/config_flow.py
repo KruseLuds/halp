@@ -19,6 +19,7 @@ from .const import (
     CONF_GPS_ENTITIES,
     CONF_GPS_WEIGHT,
     CONF_IGNORED_ENTITIES,
+    CONF_IDLE_REFRESH_MINUTES,
     CONF_KNOWN_ZONES,
     CONF_PERSON_ENTITY,
     CONF_PERSON_UNIQUE_ID,
@@ -30,6 +31,7 @@ from .const import (
     CONF_ROUTER_WEIGHT,
     DEFAULT_BLE_WEIGHT,
     DEFAULT_GPS_WEIGHT,
+    DEFAULT_IDLE_REFRESH_MINUTES,
     DEFAULT_RELIABLE_THRESHOLD,
     DEFAULT_ROUTER_WEIGHT,
     DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME,
@@ -257,6 +259,7 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._data[CONF_GPS_WEIGHT] = DEFAULT_GPS_WEIGHT
         self._data[CONF_BLE_WEIGHT] = DEFAULT_BLE_WEIGHT
         self._data[CONF_ROUTER_WEIGHT] = DEFAULT_ROUTER_WEIGHT
+        self._data[CONF_IDLE_REFRESH_MINUTES] = DEFAULT_IDLE_REFRESH_MINUTES
         self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME] = DEFAULT_PRIORITIZE_SECOND_GPS_NOT_HOME
         self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED] = bool(
             self._data.get(CONF_GPS_ENTITIES, [])
@@ -674,6 +677,7 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_GPS_WEIGHT: user_input[CONF_GPS_WEIGHT],
                     CONF_BLE_WEIGHT: user_input[CONF_BLE_WEIGHT],
                     CONF_ROUTER_WEIGHT: user_input[CONF_ROUTER_WEIGHT],
+                    CONF_IDLE_REFRESH_MINUTES: user_input[CONF_IDLE_REFRESH_MINUTES],
                     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME: (
                         prioritize_second_gps_not_home
                     ),
@@ -729,6 +733,24 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                 max=100,
                 step=1,
                 mode=selector.NumberSelectorMode.SLIDER,
+            )
+        )
+
+        schema_fields[
+            vol.Required(
+                CONF_IDLE_REFRESH_MINUTES,
+                default=current.get(
+                    CONF_IDLE_REFRESH_MINUTES,
+                    DEFAULT_IDLE_REFRESH_MINUTES,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=1,
+                max=60,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="min",
             )
         )
 
