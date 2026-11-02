@@ -1,6 +1,6 @@
 # HALP! DESIGN DOCUMENT
 
-Version: **2.1.2 (Living Document)**
+Version: **2.1.3 (Living Document)**
 
 ## Purpose
 

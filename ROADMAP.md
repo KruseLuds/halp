@@ -105,6 +105,12 @@
 -   Retain the existing presence calculations, GPS behavior, and
     fixed-zone validation
 
+### Version 2.1.3 Maintenance Update
+
+-   Add the root-level `hacs.json` required for installation and
+    updates through the Home Assistant Marketplace (issue #5)
+-   No changes to the presence engine or runtime behavior
+
 ------------------------------------------------------------------------
 
 ## Version 2.2

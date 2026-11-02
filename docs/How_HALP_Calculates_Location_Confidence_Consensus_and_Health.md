@@ -8,6 +8,9 @@ This document explains the calculations behind HALP!'s principal
 dashboard values in clear English. The source code remains the final
 technical authority, primarily in `custom_components/halp/helpers.py`.
 
+Version 2.1.3 changes Marketplace installation metadata only. It does not
+change the location, Confidence, Consensus, or Source Health calculations.
+
 ## 1. Location vocabulary and source types
 
 HALP! uses Home Assistant-compatible location states. A Vetted Location

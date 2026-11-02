@@ -18,6 +18,14 @@ Instead, HALP! analyzes the location information Home Assistant already has and 
 
 ---
 
+# What's New in Version 2.1.3
+
+Version 2.1.3 is a packaging-only compatibility release. It adds the root-level `hacs.json` metadata required by the Home Assistant Marketplace when installing or updating HALP! (see [issue #5](https://github.com/KruseLuds/halp/issues/5)).
+
+The integration remains under `custom_components/halp/`, and the existing HACS installation method remains supported. No changes were made to HALP!'s runtime logic, location calculations, alerts, sensor entities, or configuration settings.
+
+---
+
 # What's New in Version 2.1.2
 
 Version 2.1.2 is a maintenance release addressing [issue #4](https://github.com/KruseLuds/halp/issues/4) by making zone configuration warnings more relevant and eliminating repeated persistent-notification service calls when nothing has changed.

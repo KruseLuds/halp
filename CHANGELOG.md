@@ -5,10 +5,26 @@ All notable changes to HALP! will be documented in this file.
 This project follows Semantic Versioning (SemVer).
 
 
-# Version 2.1.2
+# Version 2.1.3
 
 **Release Date:**
 Pending publication
+
+## Fixed
+
+- Added the root-level `hacs.json` repository metadata so the Home Assistant Marketplace can install and update HALP! (issue #5).
+
+## Compatibility
+
+- Packaging-only change. Existing HACS installations remain supported.
+- No changes to presence calculations, notifications, entities, configuration, or the runtime integration code.
+
+------------------------------------------------------------------------
+
+# Version 2.1.2
+
+**Release Date:**
+November 2, 2026
 
 ## Fixed
 
