@@ -314,9 +314,16 @@ When the Configure flow is opened and saved:
 -   mobile WiFi/router may use **None / Mobile**;
 -   GPS never receives a fixed-zone assignment.
 
-HALP! also records the set of active zones when configuration is saved
-and can notify the user if the active Home Assistant zone set later
-changes, prompting a configuration review.
+Version 2.1.2 only notifies the user when a fixed BLE or router/WiFi
+source has no valid active zone assignment. Adding, renaming, or removing
+unrelated Home Assistant zones does not require a HALP! configuration
+review. A legacy whole-zone-inventory warning is cleared at startup.
+
+HALP! checks configuration once a minute but creates, updates, or dismisses
+persistent notifications only when their content or status changes.
+Manually dismissed warnings stay dismissed for the current config-entry
+runtime while their content is unchanged. An unresolved warning may
+appear once again following a Home Assistant restart or HALP! reload.
 
 ## 8. Last Reliable Change
 
@@ -390,6 +397,10 @@ The principal implementation is located in:
     handling and configuration-change monitoring;
 -   `custom_components/halp/config_flow.py` --- tracker classification
     and fixed-zone assignment;
+-   `custom_components/halp/notifications.py` --- change-aware
+    persistent notification publishing;
+-   `custom_components/halp/zone_validation.py` --- fixed-zone
+    assignment validity checks;
 -   `custom_components/halp/sensor.py` --- Home Assistant sensors and
     explanatory attributes;
 -   `custom_components/halp/history.py` --- rolling and daily multi-zone

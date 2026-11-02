@@ -5,6 +5,32 @@ All notable changes to HALP! will be documented in this file.
 This project follows Semantic Versioning (SemVer).
 
 
+# Version 2.1.2
+
+**Release Date:**
+Pending publication
+
+## Fixed
+
+- Removed redundant configuration warnings triggered by unrelated Home Assistant zone additions, renames, and removals. HALP! still warns when an assigned fixed BLE or router/WiFi zone is missing or inactive.
+- Prevented repeated `persistent_notification.create` and `persistent_notification.dismiss` service calls from unchanged one-minute HALP! checks.
+- Retired the legacy whole-zone-inventory warning and cleared existing instances during config-entry startup.
+
+## Changed
+
+- Centralized persistent notification updates behind stable IDs and exact message/title comparison.
+- Preserved manual dismissal of an unchanged warning for the remainder of the current config-entry runtime. An unresolved warning may reappear once after Home Assistant restart or HALP! reload.
+- Stopped saving redundant active-zone-inventory snapshots during configuration.
+- Added automated regression tests for notification deduplication, manual dismissal, fixed-zone validation, and unchanged-zone behavior.
+
+## Compatibility
+
+- Retained one-minute configuration validation and warnings for actual invalid BLE and router/WiFi fixed-zone assignments.
+- No changes to Home Assistant Person entities, trackers, zones, automations, HALP! location scoring, Confidence, Consensus, Source Health, or history calculations.
+- Validated locally with unit tests and confirmed that unrelated zone additions/deletions generated no HALP! notification calls in a running Home Assistant installation. Additional edge-case runtime validation remains part of release review.
+
+------------------------------------------------------------------------
+
 # Version 2.1.1
 
 **Release Date:**

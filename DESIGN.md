@@ -1,6 +1,6 @@
 # HALP! DESIGN DOCUMENT
 
-Version: **2.1.1 (Living Document)**
+Version: **2.1.2 (Living Document)**
 
 ## Purpose
 
@@ -161,12 +161,20 @@ may be assigned to exactly one active zone; a genuinely mobile
 WiFi/router source may use **None / Mobile** and therefore does not cast
 an absolute geographic vote.
 
-HALP! tracks the configured active-zone inventory. Adding or removing
-Home Assistant zones can create a persistent notification instructing
-the user to open **Settings -\> Devices & services -\> HALP!** and click
-the **gear icon for that Person** to review/update settings. Deleted
-trackers and deleted zone references are discarded during
-reconfiguration.
+HALP! validates the zones actually assigned to fixed BLE and router/WiFi
+trackers. Adding, renaming, or removing an unrelated Home Assistant zone does
+not require a HALP! configuration review. When an assigned fixed zone ceases
+to exist or becomes inactive, HALP! raises a persistent notification for that
+Person. Dynamic GPS trackers continue to use Home Assistant's current zone
+states without a fixed assignment. Deleted tracker and invalid zone references
+are reconciled during reconfiguration.
+
+Persistent notifications are managed per config entry with stable IDs and an
+in-memory last-published title/message cache. Unchanged checks do not repeat
+`create` or `dismiss` calls. A manually dismissed warning is not republished
+until its content changes, or until HALP! is reloaded/restarted with an
+outstanding problem. A retired zone-inventory notice is dismissed once on
+startup. No notification status is persisted to disk.
 
 ## Calculation documentation
 

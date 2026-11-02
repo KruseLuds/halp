@@ -22,7 +22,6 @@ from .const import (
     CONF_GPS_ENTITIES,
     CONF_IGNORED_ENTITIES,
     CONF_IDLE_REFRESH_MINUTES,
-    CONF_KNOWN_ZONES,
     CONF_PERSON_ENTITY,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME,
     CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED,
@@ -66,6 +65,8 @@ from .helpers import (
     zone_location_state,
 )
 from .history import async_record_history_sample
+from .notifications import NotificationPublisher
+from .zone_validation import invalid_fixed_zone_assignments
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +84,9 @@ TRACKER_MISMATCH_CHECK_INTERVAL = timedelta(minutes=1)
 
 PERSON_STORAGE_KEY = "person"
 PERSON_STORAGE_VERSION = 2
+
+# Per-entry, in-memory notification state. Never store as ConfigEntry options.
+RUNTIME_NOTIFICATION_PUBLISHER = "_notification_publisher"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -118,6 +122,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     config[RUNTIME_SENSOR_REFRESH_CALLBACKS] = set()
     config[RUNTIME_HISTORY_REFRESH_CALLBACKS] = set()
     config[RUNTIME_IDLE_REFRESH_CANCEL] = None
+    config[RUNTIME_NOTIFICATION_PUBLISHER] = NotificationPublisher(hass)
 
     resolved_person_entity = resolve_person_entity_id(hass, entry)
 
@@ -152,7 +157,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not config.get("person_missing", False):
         await _async_check_tracker_mismatch(hass, entry, config)
         await _async_check_fixed_zone_configuration(hass, entry, config)
-        await _async_check_zone_mismatch(hass, entry, config)
+
+    # Issue #4: the old inventory-mismatch warning was triggered by every
+    # unrelated zone addition/removal. Retire it and clear any existing notice
+    # once when an entry starts. Actual fixed-zone assignments are still checked.
+    await config[RUNTIME_NOTIFICATION_PUBLISHER].async_dismiss(
+        f"{DOMAIN}_zone_mismatch_{entry.entry_id}"
+    )
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
@@ -176,7 +187,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         await _async_check_tracker_mismatch(hass, entry, current_config)
         await _async_check_fixed_zone_configuration(hass, entry, current_config)
-        await _async_check_zone_mismatch(hass, entry, current_config)
         await _async_update_fast_departure_review_notification(
             hass, entry, current_config
         )
@@ -640,11 +650,8 @@ async def _async_check_fixed_zone_configuration(
     exactly one active zone. A router source explicitly configured as
     None / Mobile is valid without a zone.
 
-    This check is deliberately independent of the zone-inventory mismatch
-    notification. The configuration-required notification means a source is
-    not yet safely usable for multi-zone scoring. The zone-inventory
-    notification means Home Assistant's set of zones changed after HALP! was
-    configured, even if no existing source assignment needs to change.
+    Only *assigned* fixed zones matter here. Adding, renaming, or removing
+    unrelated Home Assistant zones does not require reconfiguration.
     """
     active_zones = {
         state.entity_id
@@ -652,47 +659,21 @@ async def _async_check_fixed_zone_configuration(
         if not bool(state.attributes.get("passive", False))
     }
 
-    ble_entities = [
-        entity_id
-        for entity_id in config.get(CONF_BLE_ENTITIES, [])
-        if isinstance(entity_id, str)
-    ]
-    router_entities = [
-        entity_id
-        for entity_id in config.get(CONF_ROUTER_ENTITIES, [])
-        if isinstance(entity_id, str)
-    ]
-
-    ble_zones = config.get(CONF_BLE_ZONES, {})
-    if not isinstance(ble_zones, dict):
-        ble_zones = {}
-
-    router_zones = config.get(CONF_ROUTER_ZONES, {})
-    if not isinstance(router_zones, dict):
-        router_zones = {}
-
-    missing_ble = [
-        entity_id
-        for entity_id in ble_entities
-        if ble_zones.get(entity_id) not in active_zones
-    ]
-    missing_router = []
-    for entity_id in router_entities:
-        assignment = router_zones.get(entity_id)
-        if assignment == ROUTER_ZONE_NONE_MOBILE:
-            continue
-        if assignment not in active_zones:
-            missing_router.append(entity_id)
+    missing_ble, missing_router = invalid_fixed_zone_assignments(
+        config,
+        active_zones,
+        ble_entities_key=CONF_BLE_ENTITIES,
+        router_entities_key=CONF_ROUTER_ENTITIES,
+        ble_zones_key=CONF_BLE_ZONES,
+        router_zones_key=CONF_ROUTER_ZONES,
+        mobile_marker=ROUTER_ZONE_NONE_MOBILE,
+    )
 
     notification_id = f"{DOMAIN}_fixed_zone_configuration_{entry.entry_id}"
 
+    publisher = config[RUNTIME_NOTIFICATION_PUBLISHER]
     if not missing_ble and not missing_router:
-        await hass.services.async_call(
-            "persistent_notification",
-            "dismiss",
-            {"notification_id": notification_id},
-            blocking=False,
-        )
+        await publisher.async_dismiss(notification_id)
         return
 
     lines = [
@@ -711,65 +692,10 @@ async def _async_check_fixed_zone_configuration(
             + ", ".join(sorted(missing_router))
         )
 
-    await hass.services.async_call(
-        "persistent_notification",
-        "create",
-        {
-            "title": f"HALP! zone assignment required for {entry.title}",
-            "message": "\n\n".join(lines),
-            "notification_id": notification_id,
-        },
-        blocking=False,
-    )
-
-
-async def _async_check_zone_mismatch(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    config: dict[str, Any],
-) -> None:
-    """Notify when the set of active Home Assistant zones has changed."""
-    current_zones = {
-        state.entity_id
-        for state in hass.states.async_all("zone")
-        if not bool(state.attributes.get("passive", False))
-    }
-    known = config.get(CONF_KNOWN_ZONES)
-    if not isinstance(known, list):
-        # Entries created before v2.0.0 have no zone inventory yet. Do not
-        # create noise on upgrade; Configure will establish the baseline.
-        return
-    known_zones = {zone for zone in known if isinstance(zone, str)}
-    added = sorted(current_zones - known_zones)
-    removed = sorted(known_zones - current_zones)
-    notification_id = f"{DOMAIN}_zone_mismatch_{entry.entry_id}"
-
-    if not added and not removed:
-        await hass.services.async_call(
-            "persistent_notification",
-            "dismiss",
-            {"notification_id": notification_id},
-            blocking=False,
-        )
-        return
-
-    lines = [
-        "Home Assistant's active zone set changed after this HALP! entry was configured.",
-        "Open Settings → Devices & services → HALP!, then click the gear icon for this Person to review/update the fixed BLE and WiFi/router zone assignments.",
-    ]
-    if added:
-        lines.append("Added zones: " + ", ".join(added))
-    if removed:
-        lines.append("Removed zones: " + ", ".join(removed))
-    await hass.services.async_call(
-        "persistent_notification",
-        "create",
-        {
-            "title": f"HALP! zone configuration changed for {entry.title}",
-            "message": "\n\n".join(lines),
-            "notification_id": notification_id,
-        },
-        blocking=False,
+    await publisher.async_publish(
+        notification_id,
+        f"HALP! zone assignment required for {entry.title}",
+        "\n\n".join(lines),
     )
 
 
@@ -803,7 +729,7 @@ async def _async_check_tracker_mismatch(
     halp_only = sorted(halp_location_trackers - person_trackers)
 
     if not person_only and not halp_only:
-        await _async_dismiss_tracker_mismatch_notification(hass, entry)
+        await _async_dismiss_tracker_mismatch_notification(hass, entry, config)
         return
 
     title = f"HALP! tracker mismatch for {entry.title}"
@@ -833,15 +759,10 @@ async def _async_check_tracker_mismatch(
         "from HALP! analysis."
     )
 
-    await hass.services.async_call(
-        "persistent_notification",
-        "create",
-        {
-            "title": title,
-            "message": "\n".join(message_parts),
-            "notification_id": _tracker_mismatch_notification_id(entry),
-        },
-        blocking=False,
+    await config[RUNTIME_NOTIFICATION_PUBLISHER].async_publish(
+        _tracker_mismatch_notification_id(entry),
+        title,
+        "\n".join(message_parts),
     )
 
 
@@ -926,15 +847,11 @@ async def _async_assigned_trackers_for_person(
 async def _async_dismiss_tracker_mismatch_notification(
     hass: HomeAssistant,
     entry: ConfigEntry,
+    config: dict[str, Any],
 ) -> None:
-    """Dismiss an old mismatch notification when the entry is healthy again."""
-    await hass.services.async_call(
-        "persistent_notification",
-        "dismiss",
-        {
-            "notification_id": _tracker_mismatch_notification_id(entry),
-        },
-        blocking=False,
+    """Clear a resolved mismatch notification only once."""
+    await config[RUNTIME_NOTIFICATION_PUBLISHER].async_dismiss(
+        _tracker_mismatch_notification_id(entry)
     )
 
 
@@ -954,33 +871,23 @@ async def _async_update_fast_departure_review_notification(
     )
     notification_id = _fast_departure_review_notification_id(entry)
 
+    publisher = config[RUNTIME_NOTIFICATION_PUBLISHER]
     if reviewed:
-        await hass.services.async_call(
-            "persistent_notification",
-            "dismiss",
-            {"notification_id": notification_id},
-            blocking=False,
-        )
+        await publisher.async_dismiss(notification_id)
         return
 
-    await hass.services.async_call(
-        "persistent_notification",
-        "create",
-        {
-            "title": f"HALP! configuration review required for {entry.title}",
-            "message": (
-                "HALP! added the option **Speed up location transitions: "
-                "prioritize second matching GPS location update.**\n\n"
-                "For existing HALP! entries, this option remains disabled until "
-                "you review it. Open **Settings → Devices & services → HALP!**, "
-                "then click the **gear icon for this Person**, review the setting "
-                "you want, and save the configuration.\n\n"
-                "This notification will be recreated until the Configure flow "
-                "has been saved."
-            ),
-            "notification_id": notification_id,
-        },
-        blocking=False,
+    await publisher.async_publish(
+        notification_id,
+        f"HALP! configuration review required for {entry.title}",
+        (
+            "HALP! added the option **Speed up location transitions: "
+            "prioritize second matching GPS location update.**\n\n"
+            "For existing HALP! entries, this option remains disabled until "
+            "you review it. Open **Settings → Devices & services → HALP!**, "
+            "then click the **gear icon for this Person**, review the setting "
+            "you want, and save the configuration.\n\n"
+            "This reminder clears after you save the Configure flow."
+        ),
     )
 
 

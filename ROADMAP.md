@@ -94,6 +94,17 @@
 -   Removal of the redundant user-facing History Summary sample-count
     sensor while retaining HALP!'s underlying rolling history
 
+### Version 2.1.2 Maintenance Update
+
+-   Limit zone-configuration warnings to invalid fixed BLE and router/WiFi
+    assignments rather than changes to the entire active-zone inventory
+-   Deduplicate persistent-notification create and dismiss service calls
+    during the one-minute Person configuration checks
+-   Respect manual dismissal of unchanged warnings during the current
+    entry runtime and reconcile outstanding notices on reload
+-   Retain the existing presence calculations, GPS behavior, and
+    fixed-zone validation
+
 ------------------------------------------------------------------------
 
 ## Version 2.2

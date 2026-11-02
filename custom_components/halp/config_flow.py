@@ -264,7 +264,6 @@ class HalpConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._data[CONF_PRIORITIZE_SECOND_GPS_NOT_HOME_REVIEWED] = bool(
             self._data.get(CONF_GPS_ENTITIES, [])
         )
-        self._data[CONF_KNOWN_ZONES] = sorted(_active_zone_ids(self.hass))
         return self.async_create_entry(title=self._person_name(), data=self._data)
 
     def _classified_groups(
@@ -645,6 +644,8 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
 
         if user_input is not None:
             new_data = dict(self._config_entry.data)
+            # Legacy zone snapshots no longer trigger HALP! alerts (#4).
+            new_data.pop(CONF_KNOWN_ZONES, None)
 
             if has_gps:
                 prioritize_second_gps_not_home = user_input[
@@ -672,7 +673,6 @@ class HalpOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_ROUTER_ENTITIES: self._data.get(CONF_ROUTER_ENTITIES, []),
                     CONF_ROUTER_ZONES: self._data.get(CONF_ROUTER_ZONES, {}),
                     CONF_IGNORED_ENTITIES: self._data.get(CONF_IGNORED_ENTITIES, []),
-                    CONF_KNOWN_ZONES: sorted(_active_zone_ids(self.hass)),
                     CONF_RELIABLE_THRESHOLD: user_input[CONF_RELIABLE_THRESHOLD],
                     CONF_GPS_WEIGHT: user_input[CONF_GPS_WEIGHT],
                     CONF_BLE_WEIGHT: user_input[CONF_BLE_WEIGHT],

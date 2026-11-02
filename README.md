@@ -18,6 +18,22 @@ Instead, HALP! analyzes the location information Home Assistant already has and 
 
 ---
 
+# What's New in Version 2.1.2
+
+Version 2.1.2 is a maintenance release addressing [issue #4](https://github.com/KruseLuds/halp/issues/4) by making zone configuration warnings more relevant and eliminating repeated persistent-notification service calls when nothing has changed.
+
+## More Relevant Zone Warnings
+
+Adding, renaming, or removing a Home Assistant zone that is not assigned to a HALP! fixed BLE or router/WiFi tracker no longer generates a configuration warning. HALP! continues to notify when a fixed tracker is missing a required valid zone assignment. GPS trackers remain dynamic, and mobile router sources remain exempt from fixed-zone assignments.
+
+## Change-Aware Persistent Notifications
+
+HALP! now creates or updates a persistent notification only when its content or status changes. Repeated one-minute configuration checks no longer issue redundant Home Assistant notification service calls. A manually dismissed warning stays dismissed during the current HALP! entry runtime while its content is unchanged; an unresolved warning may appear once after a Home Assistant restart or HALP! reload.
+
+HALP! retains its one-minute checks, existing zone validation, and all presence, confidence, consensus, and history calculations. This release makes no changes to the scoring engine.
+
+---
+
 # What's New in Version 2.1.1
 
 Version 2.1.1 is a maintenance and performance release focused on dramatically reducing unnecessary HALP! state publications and Home Assistant Recorder activity without reducing location functionality or diagnostic accuracy.
